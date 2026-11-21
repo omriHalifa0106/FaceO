@@ -34,25 +34,45 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
+// Secrets are read on first use, not at module load: a missing secret then
+// becomes a clear JSON error (with CORS headers) instead of a boot crash that
+// the browser can only report as "Failed to send a request".
+class ConfigError extends Error {}
+
 function requireEnv(name: string): string {
   const value = Deno.env.get(name);
-  if (!value) throw new Error(`Missing required secret: ${name}`);
+  if (!value) throw new ConfigError(`Upload service is not configured: missing secret ${name}`);
   return value;
 }
 
-const R2_ACCOUNT_ID = requireEnv("R2_ACCOUNT_ID");
-const R2_BUCKET = requireEnv("R2_BUCKET");
-const R2_PUBLIC_URL = requireEnv("R2_PUBLIC_URL").replace(/\/+$/, "");
-const SUPABASE_URL = requireEnv("SUPABASE_URL");
-const SUPABASE_ANON_KEY = requireEnv("SUPABASE_ANON_KEY");
-const R2_ENDPOINT = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET}`;
+interface Config {
+  endpoint: string;
+  publicUrl: string;
+  supabaseUrl: string;
+  supabaseAnonKey: string;
+  r2: AwsClient;
+}
+let cachedConfig: Config | null = null;
 
-const r2 = new AwsClient({
-  accessKeyId: requireEnv("R2_ACCESS_KEY_ID"),
-  secretAccessKey: requireEnv("R2_SECRET_ACCESS_KEY"),
-  service: "s3",
-  region: "auto",
-});
+function config(): Config {
+  if (!cachedConfig) {
+    const accountId = requireEnv("R2_ACCOUNT_ID");
+    const bucket = requireEnv("R2_BUCKET");
+    cachedConfig = {
+      endpoint: `https://${accountId}.r2.cloudflarestorage.com/${bucket}`,
+      publicUrl: requireEnv("R2_PUBLIC_URL").replace(/\/+$/, ""),
+      supabaseUrl: requireEnv("SUPABASE_URL"),
+      supabaseAnonKey: requireEnv("SUPABASE_ANON_KEY"),
+      r2: new AwsClient({
+        accessKeyId: requireEnv("R2_ACCESS_KEY_ID"),
+        secretAccessKey: requireEnv("R2_SECRET_ACCESS_KEY"),
+        service: "s3",
+        region: "auto",
+      }),
+    };
+  }
+  return cachedConfig;
+}
 
 const ALLOWED_ORIGINS = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
   .split(",")
@@ -94,14 +114,14 @@ function json(req: Request, status: number, body: unknown): Response {
 // R2 operations
 // ---------------------------------------------------------------------------
 function objectUrl(key: string): string {
-  return `${R2_ENDPOINT}/${key.split("/").map(encodeURIComponent).join("/")}`;
+  return `${config().endpoint}/${key.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 async function presignPut(key: string, contentType: string): Promise<string> {
   const url = new URL(objectUrl(key));
   url.searchParams.set("X-Amz-Expires", String(URL_TTL_SECONDS));
   // Content-Type is part of the signature: the browser must send exactly it.
-  const signed = await r2.sign(
+  const signed = await config().r2.sign(
     new Request(url, { method: "PUT", headers: { "Content-Type": contentType } }),
     { aws: { signQuery: true, allHeaders: true } },
   );
@@ -109,7 +129,7 @@ async function presignPut(key: string, contentType: string): Promise<string> {
 }
 
 async function deleteObject(key: string): Promise<void> {
-  const res = await r2.fetch(objectUrl(key), { method: "DELETE" });
+  const res = await config().r2.fetch(objectUrl(key), { method: "DELETE" });
   // R2 returns 204 for both existing and already-missing objects.
   if (!res.ok && res.status !== 404) {
     throw new Error(`R2 delete failed (${res.status}): ${await res.text()}`);
@@ -169,7 +189,7 @@ async function handleUpload(supabase: SupabaseClient, userId: string, body: Reco
       return {
         key,
         uploadUrl: await presignPut(key, contentType),
-        publicUrl: `${R2_PUBLIC_URL}/${key}`,
+        publicUrl: `${config().publicUrl}/${key}`,
         headers: { "Content-Type": contentType },
       };
     }),
@@ -210,7 +230,8 @@ Deno.serve(async (req) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) throw new HttpError(401, "Missing bearer token");
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    const { supabaseUrl, supabaseAnonKey } = config();
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
       auth: { persistSession: false, autoRefreshToken: false },
     });
@@ -234,6 +255,10 @@ Deno.serve(async (req) => {
     }
   } catch (err) {
     if (err instanceof HttpError) return json(req, err.status, { error: err.message });
+    if (err instanceof ConfigError) {
+      console.error("[r2-presign]", err.message);
+      return json(req, 500, { error: err.message });
+    }
     console.error("[r2-presign]", err);
     return json(req, 500, { error: "Internal error" });
   }

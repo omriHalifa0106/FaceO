@@ -448,7 +448,10 @@ export const Tag = {
     return attempt(async () => {
       const { data, error } = await supabase
         .from('tags')
-        .select(`${TAG_COLUMNS}, user:users(id, full_name, avatar_key), guest:event_guests(id, guest_number, display_name)`)
+        // tags has two FKs to users (user_id, assigned_by): name the one we mean.
+        .select(
+          `${TAG_COLUMNS}, user:users!tags_user_id_fkey(id, full_name, avatar_key), guest:event_guests(id, guest_number, display_name)`,
+        )
         .eq('photo_id', photoId)
         .order('created_at');
       if (error) throw error;
@@ -502,6 +505,14 @@ export const Tag = {
 
 /** supabase.functions.invoke wraps HTTP errors; pull out the JSON { error } body. */
 export async function functionError(err: unknown): Promise<Error & { code?: string }> {
+  // FunctionsFetchError = no readable HTTP response at all (function not deployed,
+  // crashed at boot, or blocked by CORS). The browser hides the real status.
+  if ((err as { name?: string })?.name === 'FunctionsFetchError') {
+    return Object.assign(
+      new Error('Could not reach the upload service. Check that the r2-presign function is deployed and ALLOWED_ORIGINS includes this site.'),
+      { code: 'FUNCTION_UNREACHABLE' },
+    );
+  }
   const ctx = (err as { context?: Response })?.context;
   if (ctx && typeof ctx.json === 'function') {
     try {
