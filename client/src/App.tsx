@@ -1,52 +1,60 @@
-// src/App.tsx
-import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider, useAuth } from './context/AuthContext';
-import Layout from './components/Layout';
+// src/App.tsx — routes
+import type { ReactNode } from 'react';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { AuthProvider, useAuth } from '@/context/AuthContext';
+import Layout from '@/components/Layout';
+import { Spinner } from '@/components/ui';
 
-import Register     from './pages/Register';
-import Home         from './pages/Home';
-import Groups       from './pages/Groups';
-import GroupDetails from './pages/GroupDetails';
-import FolderScreen from './pages/FolderScreen';
-import Upload       from './pages/Upload';
-import MyGallery    from './pages/MyGallery';
-import JoinGroup    from './pages/JoinGroup';
+import Login from '@/pages/Login';
+import Register from '@/pages/Register';
+import { ForgotPassword, ResetPassword } from '@/pages/PasswordReset';
+import Home from '@/pages/Home';
+import Groups from '@/pages/Groups';
+import GroupDetails from '@/pages/GroupDetails';
+import FolderScreen from '@/pages/FolderScreen';
+import Upload from '@/pages/Upload';
+import MyGallery from '@/pages/MyGallery';
+import Profile from '@/pages/Profile';
+import JoinGroup from '@/pages/JoinGroup';
 
-// Protects routes — redirects to /register if not authenticated
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-    const { user, loading } = useAuth();
-    if (loading) return <div className="p-10 text-center text-slate-400">Loading…</div>;
-    if (!user)   return <Navigate to="/register" />;
-    return <Layout>{children}</Layout>;
-};
+function Protected({ children }: { children: ReactNode }) {
+  const { isAuthenticated, isLoadingAuth } = useAuth();
+  const location = useLocation();
+  if (isLoadingAuth) return <Spinner />;
+  if (!isAuthenticated) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
+  return <Layout>{children}</Layout>;
+}
 
 function AppRoutes() {
-    return (
-        <Routes>
-            {/* Public */}
-            <Route path="/register"      element={<Register />} />
-            <Route path="/join/:token"   element={<JoinGroup />} />
+  return (
+    <Routes>
+      {/* Public */}
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/join/:token" element={<JoinGroup />} />
 
-            {/* Protected */}
-            <Route path="/"                                element={<ProtectedRoute><Home /></ProtectedRoute>} />
-            <Route path="/groups"                          element={<ProtectedRoute><Groups /></ProtectedRoute>} />
-            <Route path="/groups/:groupId"                 element={<ProtectedRoute><GroupDetails /></ProtectedRoute>} />
-            <Route path="/groups/:groupId/faces"           element={<ProtectedRoute><FolderScreen /></ProtectedRoute>} />
-            <Route path="/upload"                          element={<ProtectedRoute><Upload /></ProtectedRoute>} />
-            <Route path="/gallery"                         element={<ProtectedRoute><MyGallery /></ProtectedRoute>} />
+      {/* Authenticated */}
+      <Route path="/" element={<Protected><Home /></Protected>} />
+      <Route path="/groups" element={<Protected><Groups /></Protected>} />
+      <Route path="/groups/:groupId" element={<Protected><GroupDetails /></Protected>} />
+      <Route path="/groups/:groupId/people/:kind/:personId" element={<Protected><FolderScreen /></Protected>} />
+      <Route path="/upload" element={<Protected><Upload /></Protected>} />
+      <Route path="/me/photos" element={<Protected><MyGallery /></Protected>} />
+      <Route path="/profile" element={<Protected><Profile /></Protected>} />
 
-            <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-    );
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
 }
 
 export default function App() {
-    return (
-        <AuthProvider>
-            <BrowserRouter>
-                <AppRoutes />
-            </BrowserRouter>
-        </AuthProvider>
-    );
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </AuthProvider>
+  );
 }

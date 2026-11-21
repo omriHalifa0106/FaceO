@@ -1,15 +1,20 @@
 {
-  "name": "backend",
+  "name": "faceo-web",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "models": "node scripts/copy-face-models.mjs",
+    "postinstall": "node scripts/copy-face-models.mjs",
+    "dev": "npm run models && vite",
+    "build": "npm run models && tsc -b && vite build",
+    "typecheck": "tsc -b",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.119.2",
+    "@vladmandic/face-api": "^1.7.15",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.562.0",
