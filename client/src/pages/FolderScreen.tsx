@@ -1,257 +1,217 @@
-// src/pages/FolderScreen.tsx
-//
-// Reached from GroupDetails via a "View by Face" button.
-// URL: /groups/:groupId/faces
-//
-// Shows a grid of face thumbnails (one tile per recognised person / guest cluster).
-// Clicking a tile opens a sub-view showing every photo that person appears in,
-// with a "Download All" button that streams a zip from the server.
-
-import { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Download, Loader2, ImageIcon, User as UserIcon, X } from 'lucide-react';
-import { api } from '../utils/api';
-import { useAuth } from '../context/AuthContext';
-import type { FaceFolder, Photo } from '../types';
+// src/pages/FolderScreen.tsx — all photos of one person (member or guest) in a group,
+// plus guest management: rename, identify as a member, merge with another guest.
+import { useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Merge, Pencil, Trash2, UserCheck } from 'lucide-react';
+import { EventGuest, Photo } from '@/api/entities';
+import { usePaged } from '@/hooks/usePaged';
+import { useGroupData } from '@/hooks/useGroupData';
+import PhotoGrid from '@/components/PhotoGrid';
+import PhotoViewer from '@/components/PhotoViewer';
+import { Avatar, Badge, Button, EmptyState, ErrorBanner, Field, Input, Modal, PageHeader, Spinner } from '@/components/ui';
+import type { AppError } from '@/lib/result';
+import type { PersonRef, Photo as PhotoRow } from '@/types';
 
 export default function FolderScreen() {
-    const { groupId }   = useParams<{ groupId: string }>();
-    const { user }      = useAuth();
-    const navigate      = useNavigate();
+  const { groupId = '', kind, personId = '' } = useParams();
+  const navigate = useNavigate();
+  const isGuest = kind === 'guest';
+  const person: PersonRef = isGuest ? { guestId: personId } : { userId: personId };
+  const { group, members, guests, viewerContext, isAdmin } = useGroupData(groupId);
+  const photos = usePaged<PhotoRow>((page) => Photo.listByPerson(groupId, person, page), [groupId, kind, personId]);
+  const list = photos.items;
+  const [viewIndex, setViewIndex] = useState<number | null>(null);
+  const [dialog, setDialog] = useState<'rename' | 'identify' | 'merge' | null>(null);
+  const [error, setError] = useState<AppError | null>(null);
+  const [busy, setBusy] = useState(false);
 
-    const [folders,       setFolders]       = useState<FaceFolder[]>([]);
-    const [loading,       setLoading]       = useState(true);
-    const [activeFolder,  setActiveFolder]  = useState<FaceFolder | null>(null);
-    const [folderPhotos,  setFolderPhotos]  = useState<Photo[]>([]);
-    const [photosLoading, setPhotosLoading] = useState(false);
-    const [isDownloading, setIsDownloading] = useState(false);
-    const [lightbox,      setLightbox]      = useState<Photo | null>(null);
+  const guest = useMemo(() => guests.data?.find((g) => g.id === personId) ?? null, [guests.data, personId]);
+  const member = useMemo(() => members.data?.find((m) => m.user_id === personId) ?? null, [members.data, personId]);
+  const name = isGuest
+    ? guest?.display_name || (guest ? `Guest ${guest.guest_number}` : 'Guest')
+    : member?.user?.full_name || 'Member';
 
-    useEffect(() => {
-        if (!groupId) return;
-        api.photos.getFaceFolders(groupId)
-            .then(setFolders)
-            .catch(console.error)
-            .finally(() => setLoading(false));
-    }, [groupId]);
+  const backTo = `/groups/${groupId}?tab=people`;
 
-    const openFolder = useCallback(async (folder: FaceFolder) => {
-        setActiveFolder(folder);
-        setPhotosLoading(true);
-        try {
-            let data: Photo[];
-            if (folder.tag_type === 'local' && folder.user_id) {
-                data = await api.photos.getByFace(folder.user_id, Number(groupId));
-            } else {
-                // Guest folders: filter by group + guest_code using group photos endpoint
-                data = await api.photos.getByGroup(groupId!, 'all');
-                // Client-side filter: only photos with this guest_code
-                // (server returns tag_count; for a full implementation add a dedicated endpoint)
-                // For POC we show the full group with a note
-            }
-            setFolderPhotos(data);
-        } catch (err) {
-            console.error('Failed to load folder photos', err);
-        } finally {
-            setPhotosLoading(false);
-        }
-    }, [groupId]);
+  const doAction = async (fn: () => Promise<{ error: AppError | null }>, after?: () => void) => {
+    setBusy(true);
+    setError(null);
+    const res = await fn();
+    setBusy(false);
+    if (res.error) return setError(res.error);
+    setDialog(null);
+    after?.();
+  };
 
-    const handleDownloadAll = async () => {
-        if (!groupId || !user || !activeFolder) return;
-        setIsDownloading(true);
-        try {
-            if (activeFolder.tag_type === 'local' && activeFolder.user_id) {
-                await api.photos.downloadZip(Number(groupId), activeFolder.user_id, 'mine');
-            } else {
-                await api.photos.downloadZip(Number(groupId), user.id, 'all');
-            }
-        } catch (err: unknown) {
-            alert(err instanceof Error ? err.message : 'Download failed');
-        } finally {
-            setIsDownloading(false);
-        }
-    };
-
-    if (loading) return (
-        <div className="flex justify-center mt-20">
-            <Loader2 className="animate-spin text-teal-600" size={32} />
-        </div>
-    );
-
-    // ── Sub-view: photos for a specific face ──────────────────────────────────
-    if (activeFolder) {
-        return (
-            <div className="max-w-6xl mx-auto">
-                {/* Sub-header */}
-                <div className="flex items-center justify-between mb-6">
-                    <button
-                        onClick={() => { setActiveFolder(null); setFolderPhotos([]); }}
-                        className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition"
-                    >
-                        <ArrowLeft size={18} /> Back to Folders
-                    </button>
-                    <button
-                        onClick={handleDownloadAll}
-                        disabled={isDownloading || folderPhotos.length === 0}
-                        className="flex items-center gap-2 bg-teal-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-teal-700 transition disabled:opacity-50"
-                    >
-                        {isDownloading
-                            ? <Loader2 size={15} className="animate-spin" />
-                            : <Download size={15} />
-                        }
-                        Download All
-                    </button>
-                </div>
-
-                {/* Person header */}
-                <div className="flex items-center gap-4 mb-6 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-                    <div className="w-14 h-14 rounded-full bg-teal-100 overflow-hidden flex items-center justify-center text-teal-700 font-bold text-lg">
-                        {activeFolder.thumbnail
-                            ? <img src={activeFolder.thumbnail} alt={activeFolder.username} className="w-full h-full object-cover" />
-                            : <UserIcon size={24} />
-                        }
-                    </div>
-                    <div>
-                        <p className="font-bold text-slate-900 text-lg">{activeFolder.username}</p>
-                        <p className="text-slate-500 text-sm">{activeFolder.photo_count} photo{activeFolder.photo_count !== 1 ? 's' : ''}</p>
-                    </div>
-                </div>
-
-                {photosLoading ? (
-                    <div className="flex justify-center py-10">
-                        <Loader2 className="animate-spin text-teal-600" size={28} />
-                    </div>
-                ) : folderPhotos.length === 0 ? (
-                    <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-200">
-                        <ImageIcon size={36} className="mx-auto text-slate-300 mb-2" />
-                        <p className="text-slate-500">No photos found</p>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                        {folderPhotos.map(photo => (
-                            <div
-                                key={photo.id}
-                                onClick={() => setLightbox(photo)}
-                                className="group relative aspect-square overflow-hidden rounded-xl bg-slate-100 border border-slate-200 cursor-pointer"
-                            >
-                                <img
-                                    src={photo.image_url}
-                                    alt=""
-                                    className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
-                                    loading="lazy"
-                                    onError={e => (e.currentTarget.src = 'https://placehold.co/300?text=⚠')}
-                                />
-                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {/* Lightbox */}
-                {lightbox && (
-                    <div
-                        className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-                        onClick={() => setLightbox(null)}
-                    >
-                        <div
-                            className="relative max-w-3xl w-full bg-white rounded-2xl overflow-hidden"
-                            onClick={e => e.stopPropagation()}
-                        >
-                            <button
-                                onClick={() => setLightbox(null)}
-                                className="absolute top-3 right-3 p-1.5 bg-black/40 text-white rounded-lg z-10"
-                            >
-                                <X size={18} />
-                            </button>
-                            <img
-                                src={lightbox.image_url}
-                                alt="Full"
-                                className="w-full max-h-[70vh] object-contain bg-black"
-                            />
-                            <div className="p-4 flex justify-end">
-                                <a
-                                    href={lightbox.image_url}
-                                    download
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="flex items-center gap-2 bg-teal-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-teal-700"
-                                >
-                                    <Download size={14} /> Download
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                )}
-            </div>
-        );
-    }
-
-    // ── Main folder grid ──────────────────────────────────────────────────────
+  if (group.loading || (isGuest && guests.loading) || (!isGuest && members.loading)) return <Spinner />;
+  if (group.error) return <ErrorBanner error={group.error} />;
+  if (isGuest && !guest) {
     return (
-        <div className="max-w-6xl mx-auto">
-            <div className="flex items-center gap-4 mb-8">
-                <button
-                    onClick={() => navigate(`/groups/${groupId}`)}
-                    className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition"
-                >
-                    <ArrowLeft size={18} />
-                </button>
-                <div>
-                    <h1 className="text-2xl font-bold text-slate-900">Photos by Face</h1>
-                    <p className="text-slate-500 text-sm">
-                        {folders.length} {folders.length === 1 ? 'person' : 'people'} detected
-                    </p>
-                </div>
-            </div>
-
-            {folders.length === 0 ? (
-                <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-slate-200">
-                    <UserIcon size={40} className="mx-auto text-slate-300 mb-3" />
-                    <h3 className="text-lg font-medium text-slate-900">No faces detected yet</h3>
-                    <p className="text-slate-500 text-sm">Upload photos and face recognition will run automatically.</p>
-                </div>
-            ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
-                    {folders.map((folder, idx) => (
-                        <button
-                            key={folder.user_id ?? folder.guest_code ?? idx}
-                            onClick={() => openFolder(folder)}
-                            className="bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-teal-200 transition group text-left overflow-hidden"
-                        >
-                            {/* Thumbnail */}
-                            <div className="aspect-square bg-slate-100 overflow-hidden">
-                                {folder.thumbnail ? (
-                                    <img
-                                        src={folder.thumbnail}
-                                        alt={folder.username}
-                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                                    />
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center bg-teal-50">
-                                        <UserIcon size={40} className="text-teal-300" />
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Label */}
-                            <div className="p-3">
-                                <p className="font-semibold text-slate-900 truncate text-sm">
-                                    {folder.tag_type === 'local' ? folder.username : `Unknown (${folder.username})`}
-                                </p>
-                                <p className="text-xs text-slate-400 mt-0.5">
-                                    {folder.photo_count} photo{folder.photo_count !== 1 ? 's' : ''}
-                                </p>
-                                {folder.tag_type === 'guest' && (
-                                    <span className="inline-block mt-1 bg-amber-50 text-amber-700 text-xs px-2 py-0.5 rounded-full">
-                                        Guest
-                                    </span>
-                                )}
-                            </div>
-                        </button>
-                    ))}
-                </div>
-            )}
-        </div>
+      <div className="space-y-4">
+        <Link to={backTo} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-teal-600"><ArrowLeft size={16} /> People</Link>
+        <EmptyState title="This guest no longer exists">They may have been identified or merged into someone else.</EmptyState>
+      </div>
     );
+  }
+
+  return (
+    <div>
+      <Link to={backTo} className="mb-3 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-teal-600">
+        <ArrowLeft size={16} /> {group.data?.name ?? 'Group'} · People
+      </Link>
+      <PageHeader
+        title={
+          <span className="flex items-center gap-3">
+            {!isGuest && <Avatar name={name} avatarKey={member?.user?.avatar_key} size={44} />}
+            {name}
+            {isGuest && <Badge tone="amber">Guest</Badge>}
+          </span>
+        }
+        subtitle={`${list.length} photo${list.length === 1 ? '' : 's'}`}
+        actions={
+          isGuest && (
+            <>
+              <Button variant="secondary" onClick={() => setDialog('rename')}><Pencil size={15} /> Name</Button>
+              <Button variant="secondary" onClick={() => setDialog('identify')}><UserCheck size={15} /> This is a member</Button>
+              <Button variant="secondary" onClick={() => setDialog('merge')}><Merge size={15} /> Same as…</Button>
+              {isAdmin && (
+                <Button
+                  variant="ghost"
+                  className="text-red-600 hover:bg-red-50"
+                  onClick={() =>
+                    window.confirm('Delete this guest? Their faces become "unknown"; the photos stay.') &&
+                    void doAction(() => EventGuest.remove(personId), () => navigate(backTo, { replace: true }))
+                  }
+                >
+                  <Trash2 size={15} />
+                </Button>
+              )}
+            </>
+          )
+        }
+      />
+      <ErrorBanner error={error || photos.error} />
+
+      {photos.loading ? (
+        <Spinner />
+      ) : list.length === 0 ? (
+        <EmptyState title="No photos" />
+      ) : (
+        <>
+          <PhotoGrid photos={list} onOpen={(_, i) => setViewIndex(i)} />
+          {photos.hasMore && (
+            <div className="mt-5 flex justify-center">
+              <Button variant="secondary" loading={photos.loadingMore} onClick={() => void photos.loadMore()}>Load more</Button>
+            </div>
+          )}
+        </>
+      )}
+
+      {viewerContext && (
+        <PhotoViewer
+          photos={list}
+          index={viewIndex}
+          onIndexChange={setViewIndex}
+          onClose={() => setViewIndex(null)}
+          context={viewerContext}
+          onChanged={(k, photoId) => {
+            if (k === 'deleted') {
+              photos.removeWhere((p) => p.id === photoId);
+              setViewIndex(null);
+            }
+            void guests.reload();
+          }}
+        />
+      )}
+
+      {isGuest && guest && (
+        <>
+          <RenameDialog
+            key={guest.display_name ?? ''}
+            open={dialog === 'rename'}
+            initial={guest.display_name ?? ''}
+            busy={busy}
+            onClose={() => setDialog(null)}
+            onSave={(value) => doAction(() => EventGuest.rename(personId, value), () => void guests.reload())}
+          />
+          <Modal open={dialog === 'identify'} onClose={() => setDialog(null)} title="Who is this?">
+            <p className="mb-4 text-sm text-slate-600">All {list.length} photo(s) of this guest will be moved to the member you pick.</p>
+            <div className="max-h-80 space-y-1 overflow-y-auto">
+              {(members.data ?? []).map((m) => (
+                <button
+                  key={m.user_id}
+                  disabled={busy}
+                  onClick={() =>
+                    void doAction(
+                      () => EventGuest.merge(personId, { userId: m.user_id }),
+                      () => navigate(`/groups/${groupId}/people/member/${m.user_id}`, { replace: true }),
+                    )
+                  }
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-teal-50"
+                >
+                  <Avatar name={m.user?.full_name ?? ''} avatarKey={m.user?.avatar_key} size={32} />
+                  <span className="text-sm font-medium">{m.user?.full_name || 'Member'}</span>
+                </button>
+              ))}
+            </div>
+            <p className="mt-4 text-xs text-slate-500">Not in the group yet? Send them the invite link — when they join and set up their face, their photos are linked automatically.</p>
+          </Modal>
+          <Modal open={dialog === 'merge'} onClose={() => setDialog(null)} title="Same person as another guest">
+            <div className="max-h-80 space-y-1 overflow-y-auto">
+              {(guests.data ?? [])
+                .filter((g) => g.id !== personId)
+                .map((g) => (
+                  <button
+                    key={g.id}
+                    disabled={busy}
+                    onClick={() =>
+                      void doAction(
+                        () => EventGuest.merge(personId, { guestId: g.id }),
+                        () => navigate(`/groups/${groupId}/people/guest/${g.id}`, { replace: true }),
+                      )
+                    }
+                    className="w-full rounded-xl px-3 py-2 text-left text-sm font-medium hover:bg-teal-50"
+                  >
+                    {g.display_name || `Guest ${g.guest_number}`}
+                  </button>
+                ))}
+              {(guests.data ?? []).length <= 1 && <p className="text-sm text-slate-500">There are no other guests in this group.</p>}
+            </div>
+          </Modal>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RenameDialog({
+  open,
+  initial,
+  busy,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  initial: string;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (value: string) => void;
+}) {
+  const [value, setValue] = useState(initial);
+  return (
+    <Modal open={open} onClose={onClose} title="Name this guest">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave(value);
+        }}
+        className="space-y-4"
+      >
+        <Field label="Name" hint="Only visible to members of this group. Leave empty to reset.">
+          <Input autoFocus maxLength={100} value={value} onChange={(e) => setValue(e.target.value)} />
+        </Field>
+        <Button type="submit" loading={busy} className="w-full">Save</Button>
+      </form>
+    </Modal>
+  );
 }

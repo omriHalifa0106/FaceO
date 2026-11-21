@@ -1,95 +1,65 @@
-// src/pages/JoinGroup.tsx
-//
-// Rendered when a user clicks an invite link:
-//   /join/:token
-//
-// If the user is already logged in → join immediately and redirect.
-// If not → show a small prompt to log in first, then join.
-
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { Loader2, Users, LogIn } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
-import { api } from '../utils/api';
+// src/pages/JoinGroup.tsx — /join/:token (invite link)
+import { useState } from 'react';
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Calendar, Users } from 'lucide-react';
+import { Group } from '@/api/entities';
+import { useAuth } from '@/context/AuthContext';
+import { useAsync } from '@/hooks/useAsync';
+import AuthShell from '@/components/AuthShell';
+import { Button, ErrorBanner, Spinner, formatDate } from '@/components/ui';
+import type { AppError } from '@/lib/result';
 
 export default function JoinGroup() {
-    const { token }    = useParams<{ token: string }>();
-    const { user }     = useAuth();
-    const navigate     = useNavigate();
+  const { token = '' } = useParams();
+  const { isAuthenticated, isLoadingAuth, profile } = useAuth();
+  const navigate = useNavigate();
+  const [joining, setJoining] = useState(false);
+  const [error, setError] = useState<AppError | null>(null);
 
-    const [status, setStatus] = useState<'idle' | 'joining' | 'done' | 'error'>('idle');
-    const [groupName, setGroupName] = useState('');
-    const [message,   setMessage]   = useState('');
+  const preview = useAsync(
+    () => (isAuthenticated ? Group.invitePreview(token) : Promise.resolve({ data: null, error: null })),
+    [token, isAuthenticated],
+  );
 
-    useEffect(() => {
-        if (!token || !user) return;        // wait for auth state
-        setStatus('joining');
+  if (isLoadingAuth) return <Spinner />;
+  // Sign in / sign up first, then come back here.
+  if (!isAuthenticated) return <Navigate to="/register" replace state={{ from: `/join/${token}` }} />;
 
-        api.groups.joinByToken(token, user.id)
-            .then((res: { group: { name: string; id: number }; alreadyMember?: boolean }) => {
-                setGroupName(res.group.name);
-                setStatus('done');
-                setTimeout(() => navigate(`/groups/${res.group.id}`), 1800);
-            })
-            .catch((err: Error) => {
-                setMessage(err.message || 'Invalid or expired invite link');
-                setStatus('error');
-            });
-    }, [token, user]);
+  if (preview.loading) return <Spinner />;
+  if (preview.data?.is_member) return <Navigate to={`/groups/${preview.data.group_id}`} replace />;
 
-    // ── Not logged in ─────────────────────────────────────────────────────────
-    if (!user) {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-                <div className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full text-center">
-                    <div className="w-16 h-16 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <Users size={30} className="text-teal-600" />
-                    </div>
-                    <h2 className="text-xl font-bold text-slate-900 mb-2">You're invited!</h2>
-                    <p className="text-slate-500 text-sm mb-6">
-                        Please sign in to join this group.
-                    </p>
-                    <Link
-                        to={`/register?redirect=/join/${token}`}
-                        className="flex items-center justify-center gap-2 bg-teal-600 text-white w-full py-3 rounded-xl font-medium hover:bg-teal-700 transition"
-                    >
-                        <LogIn size={18} /> Sign In / Register
-                    </Link>
-                </div>
-            </div>
-        );
-    }
+  const join = async () => {
+    setJoining(true);
+    const res = await Group.join(token);
+    setJoining(false);
+    if (res.error) return setError(res.error);
+    navigate(`/groups/${res.data}`, { replace: true });
+  };
 
-    // ── Joining ───────────────────────────────────────────────────────────────
+  if (!preview.data) {
     return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-            <div className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full text-center">
-                {status === 'joining' || status === 'idle' ? (
-                    <>
-                        <Loader2 size={40} className="animate-spin text-teal-500 mx-auto mb-4" />
-                        <p className="text-slate-600">Joining group…</p>
-                    </>
-                ) : status === 'done' ? (
-                    <>
-                        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
-                            ✅
-                        </div>
-                        <h2 className="text-xl font-bold text-slate-900 mb-1">Joined!</h2>
-                        <p className="text-slate-500 text-sm">Welcome to <strong>{groupName}</strong>. Redirecting…</p>
-                    </>
-                ) : (
-                    <>
-                        <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
-                            ❌
-                        </div>
-                        <h2 className="text-xl font-bold text-slate-900 mb-1">Oops</h2>
-                        <p className="text-slate-500 text-sm mb-4">{message}</p>
-                        <Link to="/" className="text-teal-600 font-medium hover:underline text-sm">
-                            Back to home
-                        </Link>
-                    </>
-                )}
-            </div>
-        </div>
+      <AuthShell title="Invite link not valid">
+        <ErrorBanner error={preview.error} />
+        <p className="text-sm text-slate-600">This link is invalid or was reset by the group admin. Ask them for a new one.</p>
+        <Link to="/" className="mt-4 inline-block font-semibold text-teal-600 hover:underline">Go home</Link>
+      </AuthShell>
     );
+  }
+
+  const g = preview.data;
+  return (
+    <AuthShell title={`Join ${g.name}`} subtitle="You've been invited to share photos.">
+      <div className="mb-6 flex flex-wrap gap-4 text-sm text-slate-600">
+        {g.event_date && <span className="flex items-center gap-1"><Calendar size={15} /> {formatDate(g.event_date)}</span>}
+        <span className="flex items-center gap-1"><Users size={15} /> {g.member_count} member{g.member_count === 1 ? '' : 's'}</span>
+      </div>
+      <ErrorBanner error={error} />
+      <Button className="mt-2 w-full py-3" loading={joining} onClick={() => void join()}>Join</Button>
+      <p className="mt-4 text-xs text-slate-500">
+        {profile?.face_enrolled_at
+          ? 'Photos you already appear in will be linked to you when you join.'
+          : 'Tip: after joining, add a selfie in your profile so FaceO can find the photos you are in.'}
+      </p>
+    </AuthShell>
+  );
 }
