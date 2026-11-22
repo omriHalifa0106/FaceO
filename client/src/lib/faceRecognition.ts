@@ -11,57 +11,32 @@
 import { supabase } from '@/lib/supabaseClient';
 import { attempt, type Result } from '@/lib/result';
 import {
-  analyzeWith,
   canvasPixels,
   detectInPixels,
   drawScaled,
   EMBEDDING_DIMENSIONS,
   FACE_MATCH_THRESHOLD,
-  initFaceApi,
   MAX_DETECTION_SIDE,
   type DetectedFace,
-  type FaceApi,
 } from '@/lib/faceModel';
+import { analyzeImage, loadFaceModels } from '@/lib/faceWorkerClient';
 
 export { EMBEDDING_DIMENSIONS, FACE_MATCH_THRESHOLD, type DetectedFace };
-
-export const MODELS_URL = `${import.meta.env.BASE_URL}models`;
 
 export type ImageSource = File | Blob | string | HTMLVideoElement | HTMLCanvasElement;
 
 // -----------------------------------------------------------------------------
-// Model loading on the main thread (lazy, once per page load). Bulk photo
-// processing uses the face worker instead (lib/faceWorkerClient.ts).
-// -----------------------------------------------------------------------------
-let modelsPromise: Promise<FaceApi> | null = null;
-
-export function loadFaceModels(): Promise<FaceApi> {
-  if (!modelsPromise) {
-    modelsPromise = (async () => {
-      const faceapi = await import('@vladmandic/face-api');
-      await initFaceApi(faceapi, MODELS_URL);
-      return faceapi;
-    })().catch((err) => {
-      modelsPromise = null; // allow retry
-      throw Object.assign(new Error(`Could not load face recognition models: ${err?.message ?? err}`), {
-        code: 'MODELS',
-      });
-    });
-  }
-  return modelsPromise;
-}
-
-// -----------------------------------------------------------------------------
-// Detection (main thread) — used for enrollment samples and camera frames
+// Detection — files/URLs go through the face worker; live elements (video,
+// canvas) can't be sent to a worker and run on the main thread.
 // -----------------------------------------------------------------------------
 
 /** Detect every face in an image and compute a 128-d descriptor for each. */
 export async function detectFaces(source: ImageSource): Promise<DetectedFace[]> {
-  const faceapi = await loadFaceModels();
   if (source instanceof Blob || typeof source === 'string') {
-    const { faces } = await analyzeWith(faceapi, source, { detect: true, thumbnail: false });
+    const { faces } = await analyzeImage(source, { detect: true, thumbnail: false });
     return faces ?? [];
   }
+  const faceapi = await loadFaceModels();
   const width = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
   const height = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
   if (!width || !height) throw new Error('The image has no pixels');

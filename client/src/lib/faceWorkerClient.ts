@@ -1,10 +1,37 @@
 // src/lib/faceWorkerClient.ts — analyze images in the face worker, falling back
 // to the main thread when workers / OffscreenCanvas / model loading in a worker
 // are unavailable.
-import { analyzeWith, type AnalyzeOptions, type AnalyzeResult } from '@/lib/faceModel';
-import { loadFaceModels, MODELS_URL } from '@/lib/faceRecognition';
+import { analyzeWith, initFaceApi, type AnalyzeOptions, type AnalyzeResult, type FaceApi } from '@/lib/faceModel';
 import type { WorkerRequest, WorkerResponse } from '@/workers/face.worker';
 
+export const MODELS_URL = `${import.meta.env.BASE_URL}models`;
+export const WASM_URL = `${import.meta.env.BASE_URL}wasm/`;
+const absolute = (path: string) => new URL(path, location.href).href;
+
+// -----------------------------------------------------------------------------
+// Main-thread models (fallback path, and live camera frames)
+// -----------------------------------------------------------------------------
+let modelsPromise: Promise<FaceApi> | null = null;
+
+export function loadFaceModels(): Promise<FaceApi> {
+  if (!modelsPromise) {
+    modelsPromise = (async () => {
+      const faceapi = await import('@vladmandic/face-api');
+      await initFaceApi(faceapi, absolute(MODELS_URL), absolute(WASM_URL));
+      return faceapi;
+    })().catch((err) => {
+      modelsPromise = null; // allow retry
+      throw Object.assign(new Error(`Could not load face recognition models: ${err?.message ?? err}`), {
+        code: 'MODELS',
+      });
+    });
+  }
+  return modelsPromise;
+}
+
+// -----------------------------------------------------------------------------
+// Worker
+// -----------------------------------------------------------------------------
 class WorkerUnavailable extends Error {}
 
 let worker: Worker | null = null;
@@ -53,14 +80,14 @@ function runInWorker(w: Worker, source: Blob | string, options: AnalyzeOptions):
   return new Promise((resolve, reject) => {
     const id = nextId++;
     pending.set(id, { resolve, reject });
-    const request: WorkerRequest = { id, source, options, modelsUrl: new URL(MODELS_URL, location.href).href };
+    const request: WorkerRequest = { id, source, options, modelsUrl: absolute(MODELS_URL), wasmUrl: absolute(WASM_URL) };
     w.postMessage(request);
   });
 }
 
 /**
  * Decode an image once and (optionally) detect faces and render a JPEG thumbnail.
- * `source` is a File/Blob (fresh upload) or a URL (already in R2).
+ * `source` is a File/Blob (fresh upload, selfie) or a URL (already in R2).
  */
 export async function analyzeImage(source: Blob | string, options: AnalyzeOptions): Promise<AnalyzeResult> {
   const w = getWorker();

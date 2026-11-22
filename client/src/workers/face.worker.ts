@@ -3,7 +3,7 @@
 import * as faceapi from '@vladmandic/face-api';
 import { analyzeWith, initFaceApi, type AnalyzeOptions, type AnalyzeResult } from '@/lib/faceModel';
 
-export type WorkerRequest = { id: number; source: Blob | string; options: AnalyzeOptions; modelsUrl: string };
+export type WorkerRequest = { id: number; source: Blob | string; options: AnalyzeOptions; modelsUrl: string; wasmUrl: string };
 export type WorkerResponse =
   | { id: number; ok: true; result: AnalyzeResult }
   | { id: number; ok: false; error: string; fatal: boolean };
@@ -34,9 +34,9 @@ faceapi.env.setEnv({
 } as unknown as Parameters<typeof faceapi.env.setEnv>[0]);
 
 let ready: Promise<void> | null = null;
-function ensureModels(modelsUrl: string): Promise<void> {
+function ensureModels(modelsUrl: string, wasmUrl: string): Promise<void> {
   if (!ready) {
-    ready = initFaceApi(faceapi, modelsUrl).then(() => undefined);
+    ready = initFaceApi(faceapi, modelsUrl, wasmUrl).then(() => undefined);
     ready.catch(() => {
       ready = null;
     });
@@ -48,11 +48,11 @@ function ensureModels(modelsUrl: string): Promise<void> {
 let queue: Promise<void> = Promise.resolve();
 
 scope.onmessage = (event) => {
-  const { id, source, options, modelsUrl } = event.data;
+  const { id, source, options, modelsUrl, wasmUrl } = event.data;
   queue = queue.then(async () => {
     if (options.detect) {
       try {
-        await ensureModels(modelsUrl);
+        await ensureModels(modelsUrl, wasmUrl);
       } catch (err) {
         scope.postMessage({ id, ok: false, error: `Model load failed: ${(err as Error)?.message ?? err}`, fatal: true });
         return;

@@ -27,17 +27,26 @@ export interface DetectedFace {
 const round = (n: number, digits = 6) => Math.round(n * 10 ** digits) / 10 ** digits;
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 
-/** Pick a tfjs backend and load the three nets. */
-export async function initFaceApi(faceapi: FaceApi, modelsUrl: string): Promise<string> {
+/**
+ * Pick a tfjs backend and load the three nets.
+ *
+ * WASM first: WebGL has to compile its shaders on first use, which measured
+ * ~33 s on a real machine before the first face came back (then ~0.4 s/photo).
+ * WASM needs no warm-up and runs ~1 s/photo from the first image.
+ */
+export async function initFaceApi(faceapi: FaceApi, modelsUrl: string, wasmUrl: string): Promise<string> {
   // The bundled tfjs exposes these at runtime but face-api's typings omit them.
   const tf = faceapi.tf as unknown as {
     setBackend(name: string): Promise<boolean>;
+    setWasmPaths(prefix: string): void;
     ready(): Promise<void>;
     getBackend(): string;
   };
+  tf.setWasmPaths(wasmUrl.endsWith('/') ? wasmUrl : `${wasmUrl}/`);
   // setBackend resolves false (does not throw) when a backend can't start.
-  const webgl = await tf.setBackend('webgl').catch(() => false);
-  if (!webgl) await tf.setBackend('cpu');
+  for (const backend of ['wasm', 'webgl', 'cpu']) {
+    if (await tf.setBackend(backend).catch(() => false)) break;
+  }
   await tf.ready();
   await Promise.all([
     faceapi.nets.ssdMobilenetv1.loadFromUri(modelsUrl),
