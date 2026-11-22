@@ -60,9 +60,11 @@ and the [Supabase CLI](https://supabase.com/docs/guides/cli).
 
 ### 1. Database
 
-1. Supabase Dashboard → **SQL Editor** → paste and run
-   `supabase/migrations/20261121000000_faceo_init.sql` (enables `vector` and
-   `pgcrypto`, creates tables, RLS, indexes, triggers, RPCs).
+1. Supabase Dashboard → **SQL Editor** → run every file in `supabase/migrations/`
+   **in filename order**:
+   * `20261121000000_faceo_init.sql` — extensions (`vector`, `pgcrypto`), tables, RLS, indexes, triggers, RPCs
+   * `20261122000000_photo_thumbnails.sql` — grid thumbnails
+   * `20261122010000_consent_and_hide_me.sql` — biometric consent (DB-enforced) and "Hide me"
    *Or with the CLI:* `supabase link --project-ref <ref>` then `supabase db push`.
 2. **Authentication → URL Configuration**
    * Site URL: your production URL (e.g. `https://faceo.example.com`)

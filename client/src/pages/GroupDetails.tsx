@@ -32,6 +32,8 @@ const FILTERS: Array<{ id: PhotoFilter; label: string }> = [
   { id: 'with_others', label: 'Me with others' },
   { id: 'no_faces', label: 'No people' },
 ];
+/** Only uploaders/admins can see others' removal requests; admins get a dedicated filter. */
+const ADMIN_FILTERS: Array<{ id: PhotoFilter; label: string }> = [{ id: 'removal_requests', label: 'Removal requests' }];
 
 export default function GroupDetails() {
   const { groupId = '' } = useParams();
@@ -148,7 +150,7 @@ function PhotosTab({ groupId, context, onChanged }: { groupId: UUID; context: No
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
-          {FILTERS.map((f) => (
+          {[...FILTERS, ...(context.myRole === 'member' ? [] : ADMIN_FILTERS)].map((f) => (
             <button
               key={f.id}
               onClick={() => setFilter(f.id)}

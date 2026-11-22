@@ -145,17 +145,24 @@ export function enrollMyFace(samples: ImageSource[]): Promise<Result<{ linkedPho
   }, 'Could not save your face profile');
 }
 
-/**
- * Remove the user's biometric reference. Existing tags stay (they are
- * group content), but no new photos will be matched to the user.
- */
-export function deleteMyFaceData(): Promise<Result<true>> {
+/** Bump when the consent text in FaceEnrollment changes materially. */
+export const FACE_CONSENT_VERSION = 'v1-2026-11';
+
+/** Record the user's explicit consent to biometric processing (required by the DB to enroll). */
+export function giveFaceConsent(): Promise<Result<string>> {
   return attempt(async () => {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const userId = sessionData.session?.user.id;
-    if (!userId) throw new Error('You need to sign in first.');
-    const { error } = await supabase.from('user_face_embeddings').delete().eq('user_id', userId);
+    const { data, error } = await supabase.rpc('give_face_consent', { p_version: FACE_CONSENT_VERSION });
+    if (error) throw error;
+    return data as string;
+  }, 'Could not record your consent');
+}
+
+/** Withdraw consent: deletes the face profile and the consent record. */
+export function withdrawFaceConsent(): Promise<Result<true>> {
+  return attempt(async () => {
+    const { error } = await supabase.rpc('withdraw_face_consent');
     if (error) throw error;
     return true as const;
-  }, 'Could not delete your face data');
+  }, 'Could not withdraw consent');
 }
+

@@ -19,6 +19,7 @@ import type {
   PersonRef,
   Photo as PhotoRow,
   PhotoFilter,
+  PhotoHideRequest,
   PhotoInsert,
   Profile,
   ProfileUpdate,
@@ -28,7 +29,8 @@ import type {
 } from '@/types';
 
 /** Explicit profile columns — keeps any future sensitive column out of the app context. */
-export const PROFILE_COLUMNS = 'id, full_name, phone, avatar_key, face_enrolled_at, created_at, updated_at';
+export const PROFILE_COLUMNS =
+  'id, full_name, phone, avatar_key, face_enrolled_at, face_consent_at, face_consent_version, created_at, updated_at';
 const GROUP_COLUMNS = 'id, name, description, kind, event_date, location, invite_token, created_by, created_at, updated_at';
 const PHOTO_COLUMNS =
   'id, group_id, uploaded_by, storage_key, thumb_key, mime_type, size_bytes, width, height, taken_at, face_status, face_count, has_faces, processed_at, created_at';
@@ -293,6 +295,18 @@ export const Photo = {
         return stripKey<PhotoRow>((data ?? []) as unknown as RowWith<PhotoRow>[], 'match');
       }
 
+      if (filter === 'removal_requests') {
+        // RLS: only the uploader / group admins (and the requester) see requests.
+        const { data, error } = await supabase
+          .from('photos')
+          .select(`${PHOTO_COLUMNS}, match:photo_hide_requests!inner(user_id)`)
+          .eq('group_id', groupId)
+          .order('created_at', { ascending: false })
+          .range(from, to);
+        if (error) throw error;
+        return stripKey<PhotoRow>((data ?? []) as unknown as RowWith<PhotoRow>[], 'match');
+      }
+
       let q = supabase.from('photos').select(PHOTO_COLUMNS).eq('group_id', groupId);
       if (filter === 'no_faces') q = q.eq('face_status', 'done').eq('face_count', 0);
       const { data, error } = await q.order('created_at', { ascending: false }).range(from, to);
@@ -496,6 +510,42 @@ export const Tag = {
       if (error) throw error;
       return true as const;
     }, 'Could not remove the tag');
+  },
+};
+
+// =============================================================================
+// PhotoHide ("hide me" / removal requests)
+// =============================================================================
+export const PhotoHide = {
+  /** Requests on a photo visible to me: my own, or all of them if I'm the uploader/admin. */
+  listByPhoto(photoId: UUID): Promise<Result<PhotoHideRequest[]>> {
+    return attempt(async () => {
+      const { data, error } = await supabase
+        .from('photo_hide_requests')
+        .select('photo_id, group_id, user_id, created_at, user:users(id, full_name)')
+        .eq('photo_id', photoId)
+        .order('created_at');
+      if (error) throw error;
+      return (data ?? []) as unknown as PhotoHideRequest[];
+    }, 'Could not load removal requests');
+  },
+
+  /** Untag me, block re-tagging, and ask the uploader/admins to remove the photo. */
+  hideMe(photoId: UUID): Promise<Result<number>> {
+    return attempt(async () => {
+      const { data, error } = await supabase.rpc('hide_me_in_photo', { p_photo_id: photoId });
+      if (error) throw error;
+      return Number(data ?? 0);
+    }, 'Could not hide you from this photo');
+  },
+
+  /** Withdraw my request (I may be re-tagged on the next scan). */
+  unhideMe(photoId: UUID): Promise<Result<true>> {
+    return attempt(async () => {
+      const { error } = await supabase.rpc('unhide_me_in_photo', { p_photo_id: photoId });
+      if (error) throw error;
+      return true as const;
+    }, 'Could not undo');
   },
 };
 

@@ -1,7 +1,7 @@
 // src/components/PhotoViewer.tsx — full photo with face boxes and tag management
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, ExternalLink, RefreshCw, Trash2, UserMinus } from 'lucide-react';
-import { Tag as TagApi, Photo as PhotoApi } from '@/api/entities';
+import { ChevronLeft, ChevronRight, EyeOff, ExternalLink, RefreshCw, Trash2, Undo2, UserMinus } from 'lucide-react';
+import { Tag as TagApi, Photo as PhotoApi, PhotoHide } from '@/api/entities';
 import { processPhoto } from '@/lib/guestResolution';
 import { r2PublicUrl } from '@/lib/supabaseClient';
 import { useAsync } from '@/hooks/useAsync';
@@ -45,6 +45,10 @@ export default function PhotoViewer<P extends Photo>({
   const [actionError, setActionError] = useState<AppError | null>(null);
 
   const tags = useAsync(() => (photo ? TagApi.listByPhoto(photo.id) : Promise.resolve({ data: [], error: null })), [photo?.id]);
+  const hideRequests = useAsync(
+    () => (photo ? PhotoHide.listByPhoto(photo.id) : Promise.resolve({ data: [], error: null })),
+    [photo?.id],
+  );
 
   const prev = useCallback(() => index !== null && index > 0 && onIndexChange(index - 1), [index, onIndexChange]);
   const next = useCallback(
@@ -79,8 +83,21 @@ export default function PhotoViewer<P extends Photo>({
       setActionError(res.error);
       return;
     }
-    if (after === 'tags') await tags.reload();
+    if (after === 'tags') await Promise.all([tags.reload(), hideRequests.reload()]);
     onChanged(after, photo.id);
+  };
+
+  const myRequest = (hideRequests.data ?? []).find((r) => r.user_id === context.myUserId) ?? null;
+  const otherRequests = (hideRequests.data ?? []).filter((r) => r.user_id !== context.myUserId);
+
+  const onHideMe = () => {
+    if (
+      !window.confirm(
+        'Remove yourself from this photo?\n\nYour tag is deleted, you will not be re-tagged in it, and the uploader and group admins are asked to remove the photo.',
+      )
+    )
+      return;
+    void run('hide', () => PhotoHide.hideMe(photo.id));
   };
 
   const onAssign = (tag: TagWithPerson, value: string) => {
@@ -205,6 +222,28 @@ export default function PhotoViewer<P extends Photo>({
                 );
               })}
             </ul>
+          )}
+
+          {/* Hide me / removal requests */}
+          {myRequest ? (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <span>You asked to be removed from this photo.</span>
+              <Button variant="ghost" className="py-1" loading={busy === 'unhide'} onClick={() => void run('unhide', () => PhotoHide.unhideMe(photo.id))}>
+                <Undo2 size={15} /> Undo
+              </Button>
+            </div>
+          ) : (
+            <Button variant="secondary" className="w-full" loading={busy === 'hide'} onClick={onHideMe}>
+              <EyeOff size={15} /> Hide me from this photo
+            </Button>
+          )}
+          {canDeletePhoto && otherRequests.length > 0 && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              <p className="font-semibold">Removal requested</p>
+              <p className="mt-0.5">
+                {otherRequests.map((r) => r.user?.full_name || 'A member').join(', ')} asked not to appear in this photo. Please consider deleting it.
+              </p>
+            </div>
           )}
 
           <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4">
