@@ -5,7 +5,7 @@ import { Tag as TagApi, Photo as PhotoApi, PhotoHide } from '@/api/entities';
 import { processPhoto } from '@/lib/guestResolution';
 import { r2PublicUrl } from '@/lib/supabaseClient';
 import { useAsync } from '@/hooks/useAsync';
-import { Badge, Button, ErrorBanner, Modal, Spinner, cn, formatDate } from '@/components/ui';
+import { Badge, Button, ErrorBanner, Modal, Spinner, SuccessBanner, cn, formatDate } from '@/components/ui';
 import type { AppError } from '@/lib/result';
 import type { EventGuest, GroupMember, MemberRole, Photo, TagWithPerson, UUID } from '@/types';
 
@@ -43,6 +43,7 @@ export default function PhotoViewer<P extends Photo>({
   const [hoverTag, setHoverTag] = useState<UUID | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<AppError | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const tags = useAsync(() => (photo ? TagApi.listByPhoto(photo.id) : Promise.resolve({ data: [], error: null })), [photo?.id]);
   const hideRequests = useAsync(
@@ -77,6 +78,7 @@ export default function PhotoViewer<P extends Photo>({
   const run = async (key: string, action: () => Promise<{ error: AppError | null }>, after: 'tags' | 'deleted' = 'tags') => {
     setBusy(key);
     setActionError(null);
+    setNotice(null);
     const res = await action();
     setBusy(null);
     if (res.error) {
@@ -104,7 +106,18 @@ export default function PhotoViewer<P extends Photo>({
     if (value === '__new') return run(tag.id, () => TagApi.splitToNewGuest(tag.id));
     if (value === '__none') return run(tag.id, () => TagApi.assign(tag.id, null));
     const [kind, id] = value.split(':');
-    return run(tag.id, () => TagApi.assign(tag.id, kind === 'u' ? { userId: id } : { guestId: id }));
+    return run(tag.id, async () => {
+      const res = await TagApi.assign(tag.id, kind === 'u' ? { userId: id } : { guestId: id });
+      // Tagging yourself teaches the matcher; tell the user what it found.
+      if (!res.error && kind === 'u' && id === context.myUserId) {
+        setNotice(
+          res.data > 0
+            ? `Thanks! FaceO learned from this and found you in ${res.data} more photo(s).`
+            : 'Thanks! FaceO will use this face to recognise you in future photos.',
+        );
+      }
+      return res;
+    });
   };
 
   const onDeletePhoto = () => {
@@ -158,6 +171,7 @@ export default function PhotoViewer<P extends Photo>({
             {photo.face_status !== 'done' ? <Badge tone="amber">Not scanned</Badge> : <Badge>{tags.data?.length ?? 0} faces</Badge>}
           </div>
           <ErrorBanner error={tags.error || actionError} />
+          {notice && <SuccessBanner>{notice}</SuccessBanner>}
           {tags.loading && !tags.data ? (
             <Spinner />
           ) : (tags.data ?? []).length === 0 ? (

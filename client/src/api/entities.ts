@@ -481,16 +481,20 @@ export const Tag = {
     }, 'Could not load tags');
   },
 
-  /** Assign a face to a member or guest; pass null to mark it as unknown. */
-  assign(tagId: UUID, target: PersonRef | null): Promise<Result<true>> {
+  /**
+   * Assign a face to a member or guest; pass null to mark it as unknown.
+   * When you tag yourself, the face becomes a reference for future matching
+   * and the result is how many more of your faces were found in the group.
+   */
+  assign(tagId: UUID, target: PersonRef | null): Promise<Result<number>> {
     return attempt(async () => {
-      const { error } = await supabase.rpc('assign_tag', {
+      const { data, error } = await supabase.rpc('assign_tag', {
         p_tag_id: tagId,
         p_user_id: target && 'userId' in target ? target.userId : null,
         p_guest_id: target && 'guestId' in target ? target.guestId : null,
       });
       if (error) throw error;
-      return true as const;
+      return Number(data ?? 0);
     }, 'Could not update the tag');
   },
 
