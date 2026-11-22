@@ -128,8 +128,16 @@ function PhotosTab({ groupId, context, onChanged }: { groupId: UUID; context: No
     setScan(null);
     if (res.error) setScanError(res.error);
     else {
-      const faces = res.data.processed.reduce((s, p) => s + p.faces, 0);
-      setScanMessage(`Scanned ${res.data.processed.length} photo(s), found ${faces} face(s)${res.data.failed.length ? `, ${res.data.failed.length} failed` : ''}.`);
+      const { processed, failed } = res.data;
+      const scanned = processed.filter((p) => p.faces !== null);
+      const faces = scanned.reduce((s, p) => s + (p.faces ?? 0), 0);
+      const thumbs = processed.filter((p) => p.thumbnail === 'created').length;
+      const parts = [
+        scanned.length ? `scanned ${scanned.length} photo(s), found ${faces} face(s)` : null,
+        thumbs ? `created ${thumbs} thumbnail(s)` : null,
+        failed.length ? `${failed.length} failed` : null,
+      ].filter(Boolean);
+      setScanMessage(parts.length ? `Done: ${parts.join(', ')}.` : 'Nothing to do.');
     }
     refresh();
   };
@@ -160,7 +168,7 @@ function PhotosTab({ groupId, context, onChanged }: { groupId: UUID; context: No
         <Card className="flex flex-wrap items-center justify-between gap-3 border-amber-100 bg-amber-50/60">
           <div className="flex items-center gap-2 text-sm text-amber-900">
             <ScanFace size={18} />
-            {scan ? `Scanning ${scan.done}/${scan.total}…` : `${pendingCount} photo(s) haven't been scanned for faces yet.`}
+            {scan ? `Scanning ${scan.done}/${scan.total}…` : `${pendingCount} photo(s) still need processing (face scan or thumbnail).`}
           </div>
           {scan ? (
             <Button variant="secondary" onClick={() => scanAbort.current?.abort()}>Stop</Button>
@@ -241,7 +249,7 @@ function PeopleTab({ groupId }: { groupId: UUID }) {
               {p.kind === 'member' && p.avatar_key ? (
                 <Avatar name={p.name} avatarKey={p.avatar_key} size={96} />
               ) : (
-                <FaceThumb storageKey={p.sample_storage_key} box={p.sample_box} size={96} alt={p.name} className="rounded-full" />
+                <FaceThumb storageKey={p.sample_storage_key} thumbKey={p.sample_thumb_key} box={p.sample_box} size={96} alt={p.name} className="rounded-full" />
               )}
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-slate-800">{p.name}</p>

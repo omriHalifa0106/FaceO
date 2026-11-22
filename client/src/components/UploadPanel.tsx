@@ -2,7 +2,7 @@
 import { useRef, useState, type DragEvent } from 'react';
 import { CheckCircle2, ImagePlus, Loader2, ScanFace, XCircle } from 'lucide-react';
 import { ACCEPTED_IMAGE_TYPES, uploadPhotos, type UploadProgress } from '@/lib/storage';
-import { processPhotoFaces } from '@/lib/guestResolution';
+import { processPhoto } from '@/lib/guestResolution';
 import { Button, cn } from '@/components/ui';
 import type { UUID } from '@/types';
 
@@ -10,7 +10,7 @@ const STAGE_LABEL: Record<UploadProgress['stage'], string> = {
   queued: 'Waiting',
   uploading: 'Uploading',
   saving: 'Saving',
-  processing: 'Finding faces',
+  processing: 'Processing',
   done: 'Done',
   error: 'Failed',
 };
@@ -33,12 +33,11 @@ export default function UploadPanel({ groupId, onUploaded }: { groupId: UUID; on
     await uploadPhotos(groupId, files, {
       signal: controller.signal,
       onProgress: (p) => setItems((prev) => prev.map((it) => (it.index === p.index ? p : it))),
-      afterSave: scanFaces
-        ? async (photo, file) => {
-            const res = await processPhotoFaces(photo, file);
-            if (res.error) throw res.error;
-          }
-        : undefined,
+      // Always render the thumbnail; detect faces only if the box is ticked.
+      afterSave: async (photo, file) => {
+        const res = await processPhoto(photo, file, { skipFaces: !scanFaces });
+        if (res.error) throw res.error;
+      },
     });
 
     setRunning(false);

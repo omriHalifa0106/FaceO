@@ -15,7 +15,9 @@ export default function PhotoGrid<P extends Photo>({
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {photos.map((photo, i) => {
-        const url = r2PublicUrl(photo.storage_key);
+        // Thumbnail when available; if it's missing in storage, fall back to the original once.
+        const url = r2PublicUrl(photo.thumb_key ?? photo.storage_key);
+        const original = r2PublicUrl(photo.storage_key);
         const text = caption?.(photo);
         return (
           <button
@@ -30,6 +32,10 @@ export default function PhotoGrid<P extends Photo>({
                 alt=""
                 loading="lazy"
                 decoding="async"
+                onError={(e) => {
+                  const img = e.currentTarget;
+                  if (original && img.src !== original) img.src = original;
+                }}
                 className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
               />
             )}

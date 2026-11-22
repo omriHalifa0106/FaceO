@@ -39,7 +39,7 @@ export interface UploadOptions {
   onProgress?: (p: UploadProgress) => void;
   /**
    * Runs after the photo row exists, with the original File still in memory
-   * (used to run face detection without downloading the image again).
+   * (used to detect faces and render the thumbnail without downloading again).
    * Errors here do not fail the upload.
    */
   afterSave?: (photo: Photo, file: File) => Promise<void>;
@@ -81,7 +81,7 @@ async function presign(body: Record<string, unknown>): Promise<PresignedUpload[]
 
 function putToR2(
   target: PresignedUpload,
-  file: File,
+  file: Blob,
   onPercent: (percent: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -207,6 +207,23 @@ export async function uploadPhotos(groupId: UUID, files: File[], opts: UploadOpt
   // Anything still queued was cancelled.
   states.filter((s) => s.stage === 'queued').forEach((s) => failItem(s, { message: 'Upload cancelled', code: 'ABORTED' }));
   return states;
+}
+
+/**
+ * Upload a photo's grid thumbnail (JPEG) next to the original and record it.
+ * The key is derived server-side from the photo, never chosen by the client.
+ */
+export async function uploadThumbnail(photoId: UUID, thumbnail: Blob): Promise<string> {
+  const { data, error } = await supabase.functions.invoke('r2-presign', {
+    body: { action: 'thumb', photoId, size: thumbnail.size },
+  });
+  if (error) throw await functionError(error);
+  const target = data?.upload as PresignedUpload | undefined;
+  if (!target) throw new Error('Upload service returned an unexpected response');
+  await putToR2(target, thumbnail, () => {});
+  const { data: key, error: rpcError } = await supabase.rpc('set_photo_thumb', { p_photo_id: photoId });
+  if (rpcError) throw rpcError;
+  return key as string;
 }
 
 /** Upload a profile picture and point the profile at it. */

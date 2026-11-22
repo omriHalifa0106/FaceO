@@ -10,32 +10,28 @@
 
 import { supabase } from '@/lib/supabaseClient';
 import { attempt, type Result } from '@/lib/result';
-import type { FaceBox } from '@/types';
+import {
+  analyzeWith,
+  canvasPixels,
+  detectInPixels,
+  drawScaled,
+  EMBEDDING_DIMENSIONS,
+  FACE_MATCH_THRESHOLD,
+  initFaceApi,
+  MAX_DETECTION_SIDE,
+  type DetectedFace,
+  type FaceApi,
+} from '@/lib/faceModel';
 
-type FaceApi = typeof import('@vladmandic/face-api');
+export { EMBEDDING_DIMENSIONS, FACE_MATCH_THRESHOLD, type DetectedFace };
 
-export const EMBEDDING_DIMENSIONS = 128;
-/** Same value as public.face_match_threshold() in SQL. */
-export const FACE_MATCH_THRESHOLD = 0.5;
+export const MODELS_URL = `${import.meta.env.BASE_URL}models`;
 
-const MODELS_URL = `${import.meta.env.BASE_URL}models`;
-/** Longest side used for detection; bigger images are downscaled (faster, less memory). */
-const MAX_DETECTION_SIDE = 1600;
-const MIN_DETECTION_CONFIDENCE = 0.5;
-/** Faces smaller than this (px, after downscale) give unreliable descriptors. */
-const MIN_FACE_SIDE = 40;
-const MAX_FACES_PER_PHOTO = 100;
-
-export interface DetectedFace {
-  box: FaceBox;
-  score: number;
-  embedding: number[];
-}
-
-export type ImageSource = File | Blob | string | HTMLImageElement | HTMLCanvasElement | HTMLVideoElement;
+export type ImageSource = File | Blob | string | HTMLVideoElement | HTMLCanvasElement;
 
 // -----------------------------------------------------------------------------
-// Model loading (lazy, once per page load)
+// Model loading on the main thread (lazy, once per page load). Bulk photo
+// processing uses the face worker instead (lib/faceWorkerClient.ts).
 // -----------------------------------------------------------------------------
 let modelsPromise: Promise<FaceApi> | null = null;
 
@@ -43,20 +39,7 @@ export function loadFaceModels(): Promise<FaceApi> {
   if (!modelsPromise) {
     modelsPromise = (async () => {
       const faceapi = await import('@vladmandic/face-api');
-      // The bundled tfjs exposes these at runtime but face-api's typings omit them.
-      const tf = faceapi.tf as unknown as {
-        setBackend(name: string): Promise<boolean>;
-        ready(): Promise<void>;
-      };
-      // setBackend resolves false (does not throw) when a backend can't start.
-      const webgl = await tf.setBackend('webgl').catch(() => false);
-      if (!webgl) await tf.setBackend('cpu');
-      await tf.ready();
-      await Promise.all([
-        faceapi.nets.ssdMobilenetv1.loadFromUri(MODELS_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODELS_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(MODELS_URL),
-      ]);
+      await initFaceApi(faceapi, MODELS_URL);
       return faceapi;
     })().catch((err) => {
       modelsPromise = null; // allow retry
@@ -69,97 +52,20 @@ export function loadFaceModels(): Promise<FaceApi> {
 }
 
 // -----------------------------------------------------------------------------
-// Image preparation
-// -----------------------------------------------------------------------------
-function loadImageElement(src: string, crossOrigin: boolean): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    if (crossOrigin) img.crossOrigin = 'anonymous'; // R2 bucket must allow GET via CORS
-    img.decoding = 'async';
-    img.onload = () => resolve(img);
-    img.onerror = () =>
-      reject(new Error(crossOrigin ? 'Could not load the image (check the R2 bucket CORS policy)' : 'Could not read the image'));
-    img.src = src;
-  });
-}
-
-/** Draw the source into a canvas no larger than MAX_DETECTION_SIDE. EXIF orientation is applied by the browser. */
-async function toDetectionCanvas(source: ImageSource): Promise<HTMLCanvasElement> {
-  let drawable: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement;
-  let width: number;
-  let height: number;
-  let revoke: string | null = null;
-
-  try {
-    if (source instanceof Blob) {
-      revoke = URL.createObjectURL(source);
-      drawable = await loadImageElement(revoke, false);
-    } else if (typeof source === 'string') {
-      drawable = await loadImageElement(source, true);
-    } else {
-      drawable = source;
-    }
-
-    if (drawable instanceof HTMLVideoElement) {
-      width = drawable.videoWidth;
-      height = drawable.videoHeight;
-    } else if (drawable instanceof HTMLImageElement) {
-      width = drawable.naturalWidth;
-      height = drawable.naturalHeight;
-    } else {
-      width = drawable.width;
-      height = drawable.height;
-    }
-    if (!width || !height) throw new Error('The image has no pixels');
-
-    const scale = Math.min(1, MAX_DETECTION_SIDE / Math.max(width, height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(width * scale);
-    canvas.height = Math.round(height * scale);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Canvas is not available in this browser');
-    ctx.drawImage(drawable, 0, 0, canvas.width, canvas.height);
-    return canvas;
-  } finally {
-    if (revoke) URL.revokeObjectURL(revoke);
-  }
-}
-
-const round = (n: number, digits = 6) => Math.round(n * 10 ** digits) / 10 ** digits;
-const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
-
-// -----------------------------------------------------------------------------
-// Detection
+// Detection (main thread) — used for enrollment samples and camera frames
 // -----------------------------------------------------------------------------
 
 /** Detect every face in an image and compute a 128-d descriptor for each. */
 export async function detectFaces(source: ImageSource): Promise<DetectedFace[]> {
   const faceapi = await loadFaceModels();
-  const canvas = await toDetectionCanvas(source);
-
-  const results = await faceapi
-    .detectAllFaces(
-      canvas,
-      new faceapi.SsdMobilenetv1Options({ minConfidence: MIN_DETECTION_CONFIDENCE, maxResults: MAX_FACES_PER_PHOTO }),
-    )
-    .withFaceLandmarks()
-    .withFaceDescriptors();
-
-  return results
-    .filter((r) => Math.min(r.detection.box.width, r.detection.box.height) >= MIN_FACE_SIDE)
-    .map((r) => {
-      const b = r.detection.box;
-      return {
-        box: {
-          x: round(clamp01(b.x / canvas.width), 5),
-          y: round(clamp01(b.y / canvas.height), 5),
-          w: round(clamp01(b.width / canvas.width), 5),
-          h: round(clamp01(b.height / canvas.height), 5),
-        },
-        score: round(r.detection.score, 4),
-        embedding: Array.from(r.descriptor, (v) => round(v)),
-      };
-    });
+  if (source instanceof Blob || typeof source === 'string') {
+    const { faces } = await analyzeWith(faceapi, source, { detect: true, thumbnail: false });
+    return faces ?? [];
+  }
+  const width = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+  const height = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+  if (!width || !height) throw new Error('The image has no pixels');
+  return detectInPixels(faceapi, canvasPixels(drawScaled(source, width, height, MAX_DETECTION_SIDE)));
 }
 
 export function euclideanDistance(a: number[], b: number[]): number {
@@ -207,7 +113,7 @@ export async function buildReferenceEmbedding(samples: ImageSource[]): Promise<{
 
   const mean = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
   for (const d of descriptors) for (let k = 0; k < EMBEDDING_DIMENSIONS; k++) mean[k] += d[k] / descriptors.length;
-  return { embedding: mean.map((v) => round(v)), sampleCount: descriptors.length };
+  return { embedding: mean.map((v) => Math.round(v * 1e6) / 1e6), sampleCount: descriptors.length };
 }
 
 /**

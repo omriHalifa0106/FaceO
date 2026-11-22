@@ -31,7 +31,7 @@ import type {
 export const PROFILE_COLUMNS = 'id, full_name, phone, avatar_key, face_enrolled_at, created_at, updated_at';
 const GROUP_COLUMNS = 'id, name, description, kind, event_date, location, invite_token, created_by, created_at, updated_at';
 const PHOTO_COLUMNS =
-  'id, group_id, uploaded_by, storage_key, mime_type, size_bytes, width, height, taken_at, face_status, face_count, has_faces, processed_at, created_at';
+  'id, group_id, uploaded_by, storage_key, thumb_key, mime_type, size_bytes, width, height, taken_at, face_status, face_count, has_faces, processed_at, created_at';
 const TAG_COLUMNS = 'id, photo_id, group_id, user_id, guest_id, box, det_score, match_distance, source, created_at';
 
 export interface Page {
@@ -345,14 +345,14 @@ export const Photo = {
     }, 'Could not load recent photos');
   },
 
-  /** Photos whose faces still need to be processed (pending or failed). */
+  /** Photos that still need face scanning (pending/failed) or a thumbnail. */
   listUnprocessed(groupId: UUID, limit = 200): Promise<Result<PhotoRow[]>> {
     return attempt(async () => {
       const { data, error } = await supabase
         .from('photos')
         .select(PHOTO_COLUMNS)
         .eq('group_id', groupId)
-        .neq('face_status', 'done')
+        .or('face_status.neq.done,thumb_key.is.null')
         .order('created_at')
         .limit(limit);
       if (error) throw error;

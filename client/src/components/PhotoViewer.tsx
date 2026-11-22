@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, ExternalLink, RefreshCw, Trash2, UserMinus } from 'lucide-react';
 import { Tag as TagApi, Photo as PhotoApi } from '@/api/entities';
-import { processPhotoFaces } from '@/lib/guestResolution';
+import { processPhoto } from '@/lib/guestResolution';
 import { r2PublicUrl } from '@/lib/supabaseClient';
 import { useAsync } from '@/hooks/useAsync';
 import { Badge, Button, ErrorBanner, Modal, Spinner, cn, formatDate } from '@/components/ui';
@@ -95,7 +95,7 @@ export default function PhotoViewer<P extends Photo>({
     void run('delete', () => PhotoApi.remove(photo.id), 'deleted');
   };
 
-  const onRescan = () => run('rescan', () => processPhotoFaces(photo));
+  const onRescan = () => run('rescan', () => processPhoto(photo, undefined, { forceFaces: true }));
 
   return (
     <Modal open={open} onClose={onClose} wide title={<span className="text-sm text-slate-500">{formatDate(photo.created_at)}</span>}>

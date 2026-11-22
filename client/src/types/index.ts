@@ -69,6 +69,8 @@ export interface Photo {
   group_id: UUID;
   uploaded_by: UUID | null;
   storage_key: string;
+  /** Small JPEG for grids (null until generated). */
+  thumb_key: string | null;
   mime_type: string;
   size_bytes: number;
   width: number | null;
@@ -138,6 +140,7 @@ export interface GroupPerson {
   avatar_key: string | null;
   photo_count: number;
   sample_storage_key: string | null;
+  sample_thumb_key: string | null;
   sample_box: FaceBox | null;
 }
 
