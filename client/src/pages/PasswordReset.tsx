@@ -5,9 +5,11 @@ import { useAuth } from '@/context/AuthContext';
 import AuthShell from '@/components/AuthShell';
 import { Button, ErrorBanner, Field, Input, SuccessBanner, Spinner } from '@/components/ui';
 import type { AppError } from '@/lib/result';
+import { useI18n } from '@/i18n/I18nProvider';
 
 export function ForgotPassword() {
   const { sendPasswordReset } = useAuth();
+  const { t } = useI18n();
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
@@ -23,20 +25,20 @@ export function ForgotPassword() {
   };
 
   return (
-    <AuthShell title="Reset your password" subtitle="We'll email you a link to choose a new password.">
+    <AuthShell title={t.auth.resetTitle} subtitle={t.auth.resetSubtitle}>
       {sent ? (
-        <SuccessBanner>If an account exists for {email}, a reset link is on its way.</SuccessBanner>
+        <SuccessBanner>{t.auth.resetSent(email)}</SuccessBanner>
       ) : (
         <form onSubmit={onSubmit} className="space-y-4">
           <ErrorBanner error={error} />
-          <Field label="Email">
+          <Field label={t.common.email}>
             <Input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
-          <Button type="submit" loading={submitting} className="w-full py-3">Send reset link</Button>
+          <Button type="submit" loading={submitting} className="w-full py-3">{t.auth.sendResetLink}</Button>
         </form>
       )}
       <p className="mt-6 text-center text-sm">
-        <Link to="/login" className="font-semibold text-teal-600 hover:underline">Back to sign in</Link>
+        <Link to="/login" className="font-semibold text-teal-600 hover:underline">{t.auth.backToSignIn}</Link>
       </p>
     </AuthShell>
   );
@@ -45,6 +47,7 @@ export function ForgotPassword() {
 /** Reached from the recovery email; Supabase signs the user in from the URL first. */
 export function ResetPassword() {
   const { updatePassword, isAuthenticated, isLoadingAuth } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [password, setPassword] = useState('');
   const [error, setError] = useState<AppError | string | null>(null);
@@ -54,16 +57,16 @@ export function ResetPassword() {
 
   if (!isAuthenticated) {
     return (
-      <AuthShell title="Link expired">
-        <p className="text-sm text-slate-600">This reset link is invalid or has expired.</p>
-        <Link to="/forgot-password" className="mt-4 inline-block font-semibold text-teal-600 hover:underline">Request a new link</Link>
+      <AuthShell title={t.auth.linkExpiredTitle}>
+        <p className="text-sm text-slate-600">{t.auth.linkExpiredBody}</p>
+        <Link to="/forgot-password" className="mt-4 inline-block font-semibold text-teal-600 hover:underline">{t.auth.requestNewLink}</Link>
       </AuthShell>
     );
   }
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (password.length < 8) return setError('Password must be at least 8 characters.');
+    if (password.length < 8) return setError(t.common.passwordTooShort(8));
     setSubmitting(true);
     const res = await updatePassword(password);
     setSubmitting(false);
@@ -72,13 +75,13 @@ export function ResetPassword() {
   };
 
   return (
-    <AuthShell title="Choose a new password">
+    <AuthShell title={t.auth.newPasswordTitle}>
       <form onSubmit={onSubmit} className="space-y-4">
         <ErrorBanner error={error} />
-        <Field label="New password" hint="At least 8 characters">
+        <Field label={t.auth.newPassword} hint={t.common.minPassword(8)}>
           <Input type="password" required autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
-        <Button type="submit" loading={submitting} className="w-full py-3">Save password</Button>
+        <Button type="submit" loading={submitting} className="w-full py-3">{t.auth.savePassword}</Button>
       </form>
     </AuthShell>
   );

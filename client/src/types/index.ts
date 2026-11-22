@@ -9,6 +9,9 @@ export interface Profile {
   phone: string | null;
   avatar_key: string | null;
   face_enrolled_at: string | null;
+  /** When the user agreed to biometric processing (required to enroll). */
+  face_consent_at: string | null;
+  face_consent_version: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -35,6 +38,8 @@ export interface GroupSummary extends Group {
   member_count: number;
   photo_count: number;
   my_role: MemberRole;
+  /** Storage keys (thumbnail when available) of the newest photos, for the card cover. */
+  cover_keys: string[];
 }
 
 export interface GroupInput {
@@ -69,6 +74,8 @@ export interface Photo {
   group_id: UUID;
   uploaded_by: UUID | null;
   storage_key: string;
+  /** Small JPEG for grids (null until generated). */
+  thumb_key: string | null;
   mime_type: string;
   size_bytes: number;
   width: number | null;
@@ -92,7 +99,16 @@ export interface PhotoInsert {
 }
 
 /** all = everything, mine = I appear, with_others = I appear with someone else, no_faces = scenery */
-export type PhotoFilter = 'all' | 'mine' | 'with_others' | 'no_faces';
+export type PhotoFilter = 'all' | 'mine' | 'with_others' | 'no_faces' | 'removal_requests';
+
+/** "Hide me": a person asked not to appear in a photo. */
+export interface PhotoHideRequest {
+  photo_id: UUID;
+  group_id: UUID;
+  user_id: UUID;
+  created_at: string;
+  user: { id: UUID; full_name: string } | null;
+}
 
 /** Normalised face box, all values 0..1 relative to the image. */
 export interface FaceBox {
@@ -138,6 +154,7 @@ export interface GroupPerson {
   avatar_key: string | null;
   photo_count: number;
   sample_storage_key: string | null;
+  sample_thumb_key: string | null;
   sample_box: FaceBox | null;
 }
 

@@ -19,6 +19,7 @@ import type {
   PersonRef,
   Photo as PhotoRow,
   PhotoFilter,
+  PhotoHideRequest,
   PhotoInsert,
   Profile,
   ProfileUpdate,
@@ -28,10 +29,11 @@ import type {
 } from '@/types';
 
 /** Explicit profile columns — keeps any future sensitive column out of the app context. */
-export const PROFILE_COLUMNS = 'id, full_name, phone, avatar_key, face_enrolled_at, created_at, updated_at';
+export const PROFILE_COLUMNS =
+  'id, full_name, phone, avatar_key, face_enrolled_at, face_consent_at, face_consent_version, created_at, updated_at';
 const GROUP_COLUMNS = 'id, name, description, kind, event_date, location, invite_token, created_by, created_at, updated_at';
 const PHOTO_COLUMNS =
-  'id, group_id, uploaded_by, storage_key, mime_type, size_bytes, width, height, taken_at, face_status, face_count, has_faces, processed_at, created_at';
+  'id, group_id, uploaded_by, storage_key, thumb_key, mime_type, size_bytes, width, height, taken_at, face_status, face_count, has_faces, processed_at, created_at';
 const TAG_COLUMNS = 'id, photo_id, group_id, user_id, guest_id, box, det_score, match_distance, source, created_at';
 
 export interface Page {
@@ -39,6 +41,7 @@ export interface Page {
   offset?: number;
 }
 const DEFAULT_PAGE = 60;
+const COVER_PHOTOS = 3;
 
 function range({ limit = DEFAULT_PAGE, offset = 0 }: Page = {}): [number, number] {
   return [offset, offset + limit - 1];
@@ -107,19 +110,26 @@ export const Group = {
       const uid = await currentUserId();
       const { data, error } = await supabase
         .from('group_members')
-        .select(`role, group:groups(${GROUP_COLUMNS}, group_members(count), photos(count))`)
-        .eq('user_id', uid);
+        .select(
+          `role, group:groups(${GROUP_COLUMNS}, group_members(count), photos(count), cover:photos(thumb_key, storage_key, created_at))`,
+        )
+        .eq('user_id', uid)
+        // newest 3 photos per group, for the card collage (one round trip)
+        .order('created_at', { referencedTable: 'group.cover', ascending: false })
+        .limit(COVER_PHOTOS, { referencedTable: 'group.cover' });
       if (error) throw error;
-      const rows = (data ?? []) as unknown as Array<{ role: MemberRole; group: GroupEmbed | null }>;
+      type CoverRow = { thumb_key: string | null; storage_key: string };
+      const rows = (data ?? []) as unknown as Array<{ role: MemberRole; group: (GroupEmbed & { cover: CoverRow[] }) | null }>;
       return rows
-        .filter((row): row is { role: MemberRole; group: GroupEmbed } => !!row.group)
+        .filter((row): row is { role: MemberRole; group: GroupEmbed & { cover: CoverRow[] } } => !!row.group)
         .map((row) => {
-          const { group_members, photos, ...group } = row.group;
+          const { group_members, photos, cover, ...group } = row.group;
           return {
             ...(group as GroupRow),
             member_count: embeddedCount(group_members),
             photo_count: embeddedCount(photos),
             my_role: row.role as MemberRole,
+            cover_keys: (cover ?? []).map((c) => c.thumb_key ?? c.storage_key),
           };
         })
         .sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -142,6 +152,7 @@ export const Group = {
         member_count: embeddedCount(group_members),
         photo_count: embeddedCount(photos),
         my_role: (me?.[0]?.role ?? 'member') as MemberRole,
+        cover_keys: [],
       };
     }, 'Group not found');
   },
@@ -293,6 +304,18 @@ export const Photo = {
         return stripKey<PhotoRow>((data ?? []) as unknown as RowWith<PhotoRow>[], 'match');
       }
 
+      if (filter === 'removal_requests') {
+        // RLS: only the uploader / group admins (and the requester) see requests.
+        const { data, error } = await supabase
+          .from('photos')
+          .select(`${PHOTO_COLUMNS}, match:photo_hide_requests!inner(user_id)`)
+          .eq('group_id', groupId)
+          .order('created_at', { ascending: false })
+          .range(from, to);
+        if (error) throw error;
+        return stripKey<PhotoRow>((data ?? []) as unknown as RowWith<PhotoRow>[], 'match');
+      }
+
       let q = supabase.from('photos').select(PHOTO_COLUMNS).eq('group_id', groupId);
       if (filter === 'no_faces') q = q.eq('face_status', 'done').eq('face_count', 0);
       const { data, error } = await q.order('created_at', { ascending: false }).range(from, to);
@@ -345,14 +368,14 @@ export const Photo = {
     }, 'Could not load recent photos');
   },
 
-  /** Photos whose faces still need to be processed (pending or failed). */
+  /** Photos that still need face scanning (pending/failed) or a thumbnail. */
   listUnprocessed(groupId: UUID, limit = 200): Promise<Result<PhotoRow[]>> {
     return attempt(async () => {
       const { data, error } = await supabase
         .from('photos')
         .select(PHOTO_COLUMNS)
         .eq('group_id', groupId)
-        .neq('face_status', 'done')
+        .or('face_status.neq.done,thumb_key.is.null')
         .order('created_at')
         .limit(limit);
       if (error) throw error;
@@ -467,16 +490,20 @@ export const Tag = {
     }, 'Could not load tags');
   },
 
-  /** Assign a face to a member or guest; pass null to mark it as unknown. */
-  assign(tagId: UUID, target: PersonRef | null): Promise<Result<true>> {
+  /**
+   * Assign a face to a member or guest; pass null to mark it as unknown.
+   * When you tag yourself, the face becomes a reference for future matching
+   * and the result is how many more of your faces were found in the group.
+   */
+  assign(tagId: UUID, target: PersonRef | null): Promise<Result<number>> {
     return attempt(async () => {
-      const { error } = await supabase.rpc('assign_tag', {
+      const { data, error } = await supabase.rpc('assign_tag', {
         p_tag_id: tagId,
         p_user_id: target && 'userId' in target ? target.userId : null,
         p_guest_id: target && 'guestId' in target ? target.guestId : null,
       });
       if (error) throw error;
-      return true as const;
+      return Number(data ?? 0);
     }, 'Could not update the tag');
   },
 
@@ -496,6 +523,42 @@ export const Tag = {
       if (error) throw error;
       return true as const;
     }, 'Could not remove the tag');
+  },
+};
+
+// =============================================================================
+// PhotoHide ("hide me" / removal requests)
+// =============================================================================
+export const PhotoHide = {
+  /** Requests on a photo visible to me: my own, or all of them if I'm the uploader/admin. */
+  listByPhoto(photoId: UUID): Promise<Result<PhotoHideRequest[]>> {
+    return attempt(async () => {
+      const { data, error } = await supabase
+        .from('photo_hide_requests')
+        .select('photo_id, group_id, user_id, created_at, user:users(id, full_name)')
+        .eq('photo_id', photoId)
+        .order('created_at');
+      if (error) throw error;
+      return (data ?? []) as unknown as PhotoHideRequest[];
+    }, 'Could not load removal requests');
+  },
+
+  /** Untag me, block re-tagging, and ask the uploader/admins to remove the photo. */
+  hideMe(photoId: UUID): Promise<Result<number>> {
+    return attempt(async () => {
+      const { data, error } = await supabase.rpc('hide_me_in_photo', { p_photo_id: photoId });
+      if (error) throw error;
+      return Number(data ?? 0);
+    }, 'Could not hide you from this photo');
+  },
+
+  /** Withdraw my request (I may be re-tagged on the next scan). */
+  unhideMe(photoId: UUID): Promise<Result<true>> {
+    return attempt(async () => {
+      const { error } = await supabase.rpc('unhide_me_in_photo', { p_photo_id: photoId });
+      if (error) throw error;
+      return true as const;
+    }, 'Could not undo');
   },
 };
 

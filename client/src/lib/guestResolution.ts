@@ -1,16 +1,19 @@
 // src/lib/guestResolution.ts — turn detected faces into tags.
 //
-// The browser detects faces and computes descriptors (faceRecognition.ts);
+// The face worker detects faces and computes descriptors (faceWorkerClient.ts);
 // public.ingest_photo_faces() then matches each one, in this order:
 //   1. a group member with an enrolled face      -> member tag
 //   2. an existing guest in the same group       -> same guest
 //   3. nobody                                    -> new "Guest N"
 // When someone enrolls or joins a group, resolve_my_guest_tags() moves
 // their matching guest faces over to them.
+//
+// The same pass renders the grid thumbnail, so each image is decoded once.
 
 import { supabase, r2PublicUrl } from '@/lib/supabaseClient';
 import { attempt, toAppError, type AppError, type Result } from '@/lib/result';
-import { detectFaces, loadFaceModels, type ImageSource } from '@/lib/faceRecognition';
+import { analyzeImage } from '@/lib/faceWorkerClient';
+import { uploadThumbnail } from '@/lib/storage';
 import { Photo as PhotoApi } from '@/api/entities';
 import type { FaceBox, Photo, UUID } from '@/types';
 
@@ -24,46 +27,70 @@ export interface IngestedTag {
 
 export interface ProcessOutcome {
   photoId: UUID;
-  faces: number;
+  /** null when faces were not (re)scanned in this pass */
+  faces: number | null;
   recognisedMembers: number;
   guests: number;
+  thumbnail: 'created' | 'skipped' | 'failed';
 }
 
+type ProcessablePhoto = Pick<Photo, 'id' | 'storage_key' | 'thumb_key' | 'face_status'>;
+
 /**
- * Detect faces in one photo and store/match them. `source` should be the
- * original File when available (no re-download); otherwise the R2 URL is used.
- * On failure the photo is marked 'failed' so it can be retried later.
+ * Detect faces (if not done yet, or `forceFaces`) and create the thumbnail (if
+ * missing) for one photo. `source` should be the original File when available
+ * (no re-download); otherwise the R2 URL is used.
+ * A failed face scan marks the photo 'failed' so it can be retried later;
+ * a failed thumbnail never fails the call (the grid falls back to the original).
  */
-export function processPhotoFaces(photo: Pick<Photo, 'id' | 'storage_key'>, source?: ImageSource): Promise<Result<ProcessOutcome>> {
+export function processPhoto(
+  photo: ProcessablePhoto,
+  source?: Blob,
+  opts: { forceFaces?: boolean; skipFaces?: boolean } = {},
+): Promise<Result<ProcessOutcome>> {
   return attempt(async () => {
-    let faces;
+    const detect = !!opts.forceFaces || (photo.face_status !== 'done' && !opts.skipFaces);
+    const thumbnail = !photo.thumb_key;
+    const outcome: ProcessOutcome = { photoId: photo.id, faces: null, recognisedMembers: 0, guests: 0, thumbnail: 'skipped' };
+    if (!detect && !thumbnail) return outcome;
+
+    const input = source ?? r2PublicUrl(photo.storage_key);
+    if (!input) throw new Error('Photo has no storage key');
+
+    let analysis;
     try {
-      const input = source ?? r2PublicUrl(photo.storage_key);
-      if (!input) throw new Error('Photo has no storage key');
-      faces = await detectFaces(input);
+      analysis = await analyzeImage(input, { detect, thumbnail });
     } catch (err) {
-      // Best effort: record the failure; ignore errors from this call itself.
-      await supabase.rpc('mark_photo_face_failed', { p_photo_id: photo.id });
+      if (detect) await supabase.rpc('mark_photo_face_failed', { p_photo_id: photo.id });
       throw err;
     }
 
-    const { data, error } = await supabase.rpc('ingest_photo_faces', {
-      p_photo_id: photo.id,
-      p_faces: faces.map((f) => ({ box: f.box, score: f.score, embedding: f.embedding })),
-    });
-    if (error) {
-      await supabase.rpc('mark_photo_face_failed', { p_photo_id: photo.id });
-      throw error;
+    if (detect && analysis.faces) {
+      const { data, error } = await supabase.rpc('ingest_photo_faces', {
+        p_photo_id: photo.id,
+        p_faces: analysis.faces.map((f) => ({ box: f.box, score: f.score, embedding: f.embedding })),
+      });
+      if (error) {
+        await supabase.rpc('mark_photo_face_failed', { p_photo_id: photo.id });
+        throw error;
+      }
+      const tags = (data ?? []) as IngestedTag[];
+      outcome.faces = tags.length;
+      outcome.recognisedMembers = tags.filter((t) => t.user_id).length;
+      outcome.guests = tags.filter((t) => t.guest_id).length;
     }
 
-    const tags = (data ?? []) as IngestedTag[];
-    return {
-      photoId: photo.id,
-      faces: tags.length,
-      recognisedMembers: tags.filter((t) => t.user_id).length,
-      guests: tags.filter((t) => t.guest_id).length,
-    };
-  }, 'Face recognition failed for this photo');
+    if (analysis.thumbnail) {
+      try {
+        await uploadThumbnail(photo.id, analysis.thumbnail);
+        outcome.thumbnail = 'created';
+      } catch (err) {
+        outcome.thumbnail = 'failed';
+        if (import.meta.env.DEV) console.warn('[thumbnail] upload failed', err);
+      }
+    }
+    return outcome;
+  }, 'Processing failed for this photo');
 }
 
 export interface BatchProgress {
@@ -79,8 +106,9 @@ export interface BatchResult {
 }
 
 /**
- * Run face recognition on every pending/failed photo of a group
- * (e.g. photos uploaded from a device that could not run the models).
+ * Finish every photo of a group that still needs a face scan (pending/failed)
+ * or a thumbnail — e.g. uploads from a device that couldn't run the models,
+ * or photos uploaded before thumbnails existed.
  */
 export async function processPendingPhotos(
   groupId: UUID,
@@ -89,25 +117,24 @@ export async function processPendingPhotos(
   const pending = await PhotoApi.listUnprocessed(groupId);
   if (pending.error) return pending;
 
-  try {
-    await loadFaceModels(); // fail fast, once, if models can't load
-  } catch (err) {
-    return { data: null, error: toAppError(err) };
-  }
-
   const result: BatchResult = { processed: [], failed: [] };
   const total = pending.data.length;
-  opts.onProgress?.({ done: 0, total, failed: 0 });
+  const report = (current?: UUID) =>
+    opts.onProgress?.({ done: result.processed.length + result.failed.length, total, failed: result.failed.length, current });
+  report();
 
   for (const photo of pending.data) {
     if (opts.signal?.aborted) break;
-    opts.onProgress?.({ done: result.processed.length + result.failed.length, total, failed: result.failed.length, current: photo.id });
-    const res = await processPhotoFaces(photo);
-    if (res.error) result.failed.push({ photoId: photo.id, error: res.error });
-    else result.processed.push(res.data);
+    report(photo.id);
+    const res = await processPhoto(photo);
+    if (res.error) {
+      result.failed.push({ photoId: photo.id, error: res.error });
+      // Model loading failed everywhere: no point trying the remaining photos.
+      if (res.error.code === 'MODELS') return { data: null, error: toAppError(res.error) };
+    } else result.processed.push(res.data);
   }
 
-  opts.onProgress?.({ done: result.processed.length + result.failed.length, total, failed: result.failed.length });
+  report();
   return { data: result, error: null };
 }
 

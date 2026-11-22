@@ -16,18 +16,21 @@ function padBox(box: FaceBox, pad = 0.35): FaceBox {
 
 export default function FaceThumb({
   storageKey,
+  thumbKey,
   box,
   size = 96,
   alt,
   className = 'rounded-2xl',
 }: {
   storageKey: string | null;
+  /** Preferred: the small grid thumbnail (boxes are relative, so they still line up). */
+  thumbKey?: string | null;
   box: FaceBox | null;
   size?: number;
   alt: string;
   className?: string;
 }) {
-  const url = r2PublicUrl(storageKey);
+  const url = r2PublicUrl(thumbKey ?? storageKey);
   if (!url || !box) {
     return <div style={{ width: size, height: size }} className={`bg-slate-200 ${className}`} aria-label={alt} />;
   }

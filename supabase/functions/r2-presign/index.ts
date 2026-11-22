@@ -10,8 +10,12 @@
 //     "files": [{ "contentType": "image/jpeg", "size": 12345 }] }
 //   -> { "uploads": [{ key, uploadUrl, publicUrl, headers }], "expiresIn": 600 }
 //
+//   { "action": "thumb", "photoId": "<uuid>", "size": 34567 }
+//   -> { "upload": { key, uploadUrl, publicUrl, headers }, "expiresIn": 600 }
+//      (key is derived from the photo: <uuid>.jpg -> <uuid>.thumb.jpg)
+//
 //   { "action": "delete", "photoId": "<uuid>" }
-//   -> { "deleted": true }
+//   -> { "deleted": true }      (removes the original and its thumbnail)
 //
 // Secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET,
 //          R2_PUBLIC_URL, optional ALLOWED_ORIGINS (comma separated).
@@ -23,6 +27,7 @@ import { AwsClient } from "npm:aws4fetch@1.0.20";
 const MAX_FILES_PER_REQUEST = 50;
 const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+const MAX_THUMB_BYTES = 2 * 1024 * 1024;
 const URL_TTL_SECONDS = 600;
 const EXTENSION_BY_TYPE: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -197,6 +202,36 @@ async function handleUpload(supabase: SupabaseClient, userId: string, body: Reco
   return { uploads, expiresIn: URL_TTL_SECONDS };
 }
 
+/** Must match public.thumb_key_for() in SQL. */
+function thumbKeyFor(storageKey: string): string {
+  return storageKey.replace(/\.[A-Za-z0-9]+$/, "") + ".thumb.jpg";
+}
+
+async function handleThumb(supabase: SupabaseClient, body: Record<string, unknown>) {
+  const photoId = String(body.photoId ?? "");
+  if (!UUID_RE.test(photoId)) throw new HttpError(400, "photoId is required");
+  const size = Number(body.size);
+  if (!Number.isFinite(size) || size <= 0 || size > MAX_THUMB_BYTES) {
+    throw new HttpError(413, "Thumbnail must be between 1 byte and 2 MB");
+  }
+
+  // RLS: only members of the photo's group can see the row.
+  const { data, error } = await supabase.from("photos").select("storage_key").eq("id", photoId).maybeSingle();
+  if (error) throw new Error(`Photo lookup failed: ${error.message}`);
+  if (!data) throw new HttpError(404, "Photo not found");
+
+  const key = thumbKeyFor(data.storage_key);
+  return {
+    upload: {
+      key,
+      uploadUrl: await presignPut(key, "image/jpeg"),
+      publicUrl: `${config().publicUrl}/${key}`,
+      headers: { "Content-Type": "image/jpeg" },
+    },
+    expiresIn: URL_TTL_SECONDS,
+  };
+}
+
 async function handleDelete(supabase: SupabaseClient, body: Record<string, unknown>) {
   const photoId = String(body.photoId ?? "");
   if (!UUID_RE.test(photoId)) throw new HttpError(400, "photoId is required");
@@ -206,15 +241,18 @@ async function handleDelete(supabase: SupabaseClient, body: Record<string, unkno
     .from("photos")
     .delete()
     .eq("id", photoId)
-    .select("storage_key");
+    .select("storage_key, thumb_key");
   if (error) throw new Error(`Photo delete failed: ${error.message}`);
   if (!data || data.length === 0) throw new HttpError(403, "Photo not found or you are not allowed to delete it");
 
-  try {
-    await deleteObject(data[0].storage_key);
-  } catch (err) {
-    // Row is gone (nothing references the file any more); log the orphan.
-    console.error(`[r2-presign] orphaned object ${data[0].storage_key}:`, err);
+  // The thumbnail key is deterministic, so delete it even if thumb_key was never set.
+  for (const key of [data[0].storage_key, data[0].thumb_key ?? thumbKeyFor(data[0].storage_key)]) {
+    try {
+      await deleteObject(key);
+    } catch (err) {
+      // Row is gone (nothing references the file any more); log the orphan.
+      console.error(`[r2-presign] orphaned object ${key}:`, err);
+    }
   }
   return { deleted: true };
 }
@@ -248,6 +286,8 @@ Deno.serve(async (req) => {
     switch (body.action ?? "upload") {
       case "upload":
         return json(req, 200, await handleUpload(supabase, user.id, body));
+      case "thumb":
+        return json(req, 200, await handleThumb(supabase, body));
       case "delete":
         return json(req, 200, await handleDelete(supabase, body));
       default:

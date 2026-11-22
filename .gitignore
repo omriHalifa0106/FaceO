@@ -29,6 +29,7 @@ dist-ssr
 
 # Face-api weights are copied from node_modules at install time
 client/public/models/
+client/public/wasm/
 
 # Supabase CLI local state
 supabase/.temp/

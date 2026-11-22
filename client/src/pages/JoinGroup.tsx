@@ -8,10 +8,12 @@ import { useAsync } from '@/hooks/useAsync';
 import AuthShell from '@/components/AuthShell';
 import { Button, ErrorBanner, Spinner, formatDate } from '@/components/ui';
 import type { AppError } from '@/lib/result';
+import { useI18n } from '@/i18n/I18nProvider';
 
 export default function JoinGroup() {
   const { token = '' } = useParams();
   const { isAuthenticated, isLoadingAuth, profile } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
@@ -38,27 +40,25 @@ export default function JoinGroup() {
 
   if (!preview.data) {
     return (
-      <AuthShell title="Invite link not valid">
+      <AuthShell title={t.join.invalidTitle}>
         <ErrorBanner error={preview.error} />
-        <p className="text-sm text-slate-600">This link is invalid or was reset by the group admin. Ask them for a new one.</p>
-        <Link to="/" className="mt-4 inline-block font-semibold text-teal-600 hover:underline">Go home</Link>
+        <p className="text-sm text-slate-600">{t.join.invalidBody}</p>
+        <Link to="/" className="mt-4 inline-block font-semibold text-teal-600 hover:underline">{t.join.goHome}</Link>
       </AuthShell>
     );
   }
 
   const g = preview.data;
   return (
-    <AuthShell title={`Join ${g.name}`} subtitle="You've been invited to share photos.">
+    <AuthShell title={t.join.title(g.name)} subtitle={t.join.subtitle}>
       <div className="mb-6 flex flex-wrap gap-4 text-sm text-slate-600">
         {g.event_date && <span className="flex items-center gap-1"><Calendar size={15} /> {formatDate(g.event_date)}</span>}
-        <span className="flex items-center gap-1"><Users size={15} /> {g.member_count} member{g.member_count === 1 ? '' : 's'}</span>
+        <span className="flex items-center gap-1"><Users size={15} /> {t.common.members(g.member_count)}</span>
       </div>
       <ErrorBanner error={error} />
-      <Button className="mt-2 w-full py-3" loading={joining} onClick={() => void join()}>Join</Button>
+      <Button className="mt-2 w-full py-3" loading={joining} onClick={() => void join()}>{t.join.join}</Button>
       <p className="mt-4 text-xs text-slate-500">
-        {profile?.face_enrolled_at
-          ? 'Photos you already appear in will be linked to you when you join.'
-          : 'Tip: after joining, add a selfie in your profile so FaceO can find the photos you are in.'}
+        {profile?.face_enrolled_at ? t.join.tipEnrolled : t.join.tipNotEnrolled}
       </p>
     </AuthShell>
   );
