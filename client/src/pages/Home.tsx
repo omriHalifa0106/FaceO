@@ -8,25 +8,27 @@ import { useAsync } from '@/hooks/useAsync';
 import PhotoGrid from '@/components/PhotoGrid';
 import { EmptyState, ErrorBanner, PageHeader, Spinner } from '@/components/ui';
 import { r2PublicUrl } from '@/lib/supabaseClient';
+import { useI18n } from '@/i18n/I18nProvider';
 
 export default function Home() {
   const { profile } = useAuth();
+  const { t } = useI18n();
   const recent = useAsync(() => Photo.listRecent(12), []);
   const mine = useAsync(() => Photo.listMine({ limit: 1 }), []);
   const [preview, setPreview] = useState<string | null>(null);
 
   const actions = [
-    { to: '/groups?create=1', label: 'New event', icon: Plus, primary: true },
-    { to: '/groups', label: 'My groups', icon: Users },
-    { to: '/upload', label: 'Upload photos', icon: Upload },
-    { to: '/me/photos', label: 'Photos of me', icon: Images },
+    { to: '/groups?create=1', label: t.home.newEvent, icon: Plus, primary: true },
+    { to: '/groups', label: t.home.myGroups, icon: Users },
+    { to: '/upload', label: t.home.uploadPhotos, icon: Upload },
+    { to: '/me/photos', label: t.home.photosOfMe, icon: Images },
   ];
 
   return (
     <div>
       <PageHeader
-        title={<>Hi{profile?.full_name ? `, ${profile.full_name.split(' ')[0]}` : ''} 👋</>}
-        subtitle="Here's what's new in your groups and events."
+        title={t.home.greeting(profile?.full_name?.split(' ')[0] ?? '')}
+        subtitle={t.home.subtitle}
       />
 
       {profile && !profile.face_enrolled_at && (
@@ -36,8 +38,8 @@ export default function Home() {
         >
           <ScanFace className="shrink-0" />
           <div className="text-sm">
-            <p className="font-semibold">Set up face recognition</p>
-            <p>Add a selfie once and FaceO will find you in every group photo.</p>
+            <p className="font-semibold">{t.home.setUpFaceTitle}</p>
+            <p>{t.home.setUpFaceBody}</p>
           </div>
         </Link>
       )}
@@ -61,17 +63,17 @@ export default function Home() {
 
       {mine.data && mine.data.length > 0 && (
         <Link to="/me/photos" className="mb-8 block text-sm font-medium text-teal-700 hover:underline">
-          You've been recognised in group photos — see them all →
+          {t.home.recognisedLink}
         </Link>
       )}
 
-      <h2 className="mb-4 text-xl font-bold text-slate-900">Recent photos</h2>
+      <h2 className="mb-4 text-xl font-bold text-slate-900">{t.home.recentPhotos}</h2>
       <ErrorBanner error={recent.error} onRetry={() => void recent.reload()} />
       {recent.loading ? (
         <Spinner />
       ) : !recent.data?.length ? (
-        <EmptyState icon={<Images size={40} />} title="No photos yet">
-          Create an event or join one with an invite link, then upload photos.
+        <EmptyState icon={<Images size={40} />} title={t.home.noPhotosTitle}>
+          {t.home.noPhotosBody}
         </EmptyState>
       ) : (
         <PhotoGrid

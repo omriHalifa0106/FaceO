@@ -38,6 +38,8 @@ export interface GroupSummary extends Group {
   member_count: number;
   photo_count: number;
   my_role: MemberRole;
+  /** Storage keys (thumbnail when available) of the newest photos, for the card cover. */
+  cover_keys: string[];
 }
 
 export interface GroupInput {

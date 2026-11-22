@@ -41,6 +41,7 @@ export interface Page {
   offset?: number;
 }
 const DEFAULT_PAGE = 60;
+const COVER_PHOTOS = 3;
 
 function range({ limit = DEFAULT_PAGE, offset = 0 }: Page = {}): [number, number] {
   return [offset, offset + limit - 1];
@@ -109,19 +110,26 @@ export const Group = {
       const uid = await currentUserId();
       const { data, error } = await supabase
         .from('group_members')
-        .select(`role, group:groups(${GROUP_COLUMNS}, group_members(count), photos(count))`)
-        .eq('user_id', uid);
+        .select(
+          `role, group:groups(${GROUP_COLUMNS}, group_members(count), photos(count), cover:photos(thumb_key, storage_key, created_at))`,
+        )
+        .eq('user_id', uid)
+        // newest 3 photos per group, for the card collage (one round trip)
+        .order('created_at', { referencedTable: 'group.cover', ascending: false })
+        .limit(COVER_PHOTOS, { referencedTable: 'group.cover' });
       if (error) throw error;
-      const rows = (data ?? []) as unknown as Array<{ role: MemberRole; group: GroupEmbed | null }>;
+      type CoverRow = { thumb_key: string | null; storage_key: string };
+      const rows = (data ?? []) as unknown as Array<{ role: MemberRole; group: (GroupEmbed & { cover: CoverRow[] }) | null }>;
       return rows
-        .filter((row): row is { role: MemberRole; group: GroupEmbed } => !!row.group)
+        .filter((row): row is { role: MemberRole; group: GroupEmbed & { cover: CoverRow[] } } => !!row.group)
         .map((row) => {
-          const { group_members, photos, ...group } = row.group;
+          const { group_members, photos, cover, ...group } = row.group;
           return {
             ...(group as GroupRow),
             member_count: embeddedCount(group_members),
             photo_count: embeddedCount(photos),
             my_role: row.role as MemberRole,
+            cover_keys: (cover ?? []).map((c) => c.thumb_key ?? c.storage_key),
           };
         })
         .sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -144,6 +152,7 @@ export const Group = {
         member_count: embeddedCount(group_members),
         photo_count: embeddedCount(photos),
         my_role: (me?.[0]?.role ?? 'member') as MemberRole,
+        cover_keys: [],
       };
     }, 'Group not found');
   },

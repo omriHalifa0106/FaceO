@@ -5,15 +5,8 @@ import { ACCEPTED_IMAGE_TYPES, uploadPhotos, type UploadProgress } from '@/lib/s
 import { processPhoto } from '@/lib/guestResolution';
 import { Button, cn } from '@/components/ui';
 import type { UUID } from '@/types';
+import { useI18n } from '@/i18n/I18nProvider';
 
-const STAGE_LABEL: Record<UploadProgress['stage'], string> = {
-  queued: 'Waiting',
-  uploading: 'Uploading',
-  saving: 'Saving',
-  processing: 'Processing',
-  done: 'Done',
-  error: 'Failed',
-};
 
 export default function UploadPanel({ groupId, onUploaded }: { groupId: UUID; onUploaded?: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -22,6 +15,7 @@ export default function UploadPanel({ groupId, onUploaded }: { groupId: UUID; on
   const [running, setRunning] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [scanFaces, setScanFaces] = useState(true);
+  const { t, translateError } = useI18n();
 
   const start = async (files: File[]) => {
     if (!files.length || running) return;
@@ -72,8 +66,8 @@ export default function UploadPanel({ groupId, onUploaded }: { groupId: UUID; on
         )}
       >
         <ImagePlus className="mb-2 text-teal-500" size={36} />
-        <p className="font-semibold text-slate-700">Drop photos here or click to choose</p>
-        <p className="mt-1 text-xs text-slate-500">JPEG, PNG or WebP · up to 25 MB each · many at once</p>
+        <p className="font-semibold text-slate-700">{t.upload.dropTitle}</p>
+        <p className="mt-1 text-xs text-slate-500">{t.upload.dropHint}</p>
         <input
           ref={inputRef}
           type="file"
@@ -89,25 +83,25 @@ export default function UploadPanel({ groupId, onUploaded }: { groupId: UUID; on
 
       <label className="flex items-center gap-2 text-sm text-slate-600">
         <input type="checkbox" checked={scanFaces} disabled={running} onChange={(e) => setScanFaces(e.target.checked)} />
-        <ScanFace size={16} /> Find faces on this device right after upload
+        <ScanFace size={16} /> {t.upload.scanFaces}
       </label>
 
       {items.length > 0 && (
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between text-sm">
             <span className="font-medium text-slate-700">
-              {done}/{items.length} uploaded{failed ? ` · ${failed} failed` : ''}
+              {t.upload.progress(done, items.length, failed)}
             </span>
             {running && (
               <Button variant="ghost" onClick={() => abortRef.current?.abort()} className="py-1 text-red-600">
-                Cancel
+                {t.common.cancel}
               </Button>
             )}
           </div>
           <div className="mb-4 h-2 overflow-hidden rounded-full bg-slate-100">
             <div className="h-full bg-teal-500 transition-all" style={{ width: `${overall}%` }} />
           </div>
-          <ul className="max-h-72 space-y-2 overflow-y-auto pr-1">
+          <ul className="max-h-72 space-y-2 overflow-y-auto pe-1">
             {items.map((it) => (
               <li key={it.index} className="flex items-center gap-3 text-sm">
                 {it.stage === 'done' ? (
@@ -121,10 +115,10 @@ export default function UploadPanel({ groupId, onUploaded }: { groupId: UUID; on
                   <div className="flex justify-between gap-2">
                     <span className="truncate text-slate-700">{it.file.name}</span>
                     <span className={cn('shrink-0 text-xs', it.stage === 'error' ? 'text-red-600' : 'text-slate-500')}>
-                      {it.stage === 'uploading' ? `${it.percent}%` : STAGE_LABEL[it.stage]}
+                      {it.stage === 'uploading' ? `${it.percent}%` : t.upload.stages[it.stage]}
                     </span>
                   </div>
-                  {it.error && <p className="truncate text-xs text-red-600">{it.error.message}</p>}
+                  {it.error && <p className="truncate text-xs text-red-600">{translateError(it.error.message)}</p>}
                   {it.stage === 'uploading' && (
                     <div className="mt-1 h-1 overflow-hidden rounded-full bg-slate-100">
                       <div className="h-full bg-teal-400" style={{ width: `${it.percent}%` }} />

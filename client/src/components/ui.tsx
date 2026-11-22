@@ -5,6 +5,7 @@ import { AlertCircle, CheckCircle2, Loader2, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { r2PublicUrl } from '@/lib/supabaseClient';
 import type { AppError } from '@/lib/result';
+import { currentLocale, useI18n } from '@/i18n/I18nProvider';
 
 export const cn = clsx;
 
@@ -75,25 +76,27 @@ export function TextArea({ className, ...rest }: React.TextareaHTMLAttributes<HT
   );
 }
 
-export function Spinner({ label = 'Loading…' }: { label?: string }) {
+export function Spinner({ label }: { label?: string }) {
+  const { t } = useI18n();
   return (
     <div className="flex items-center justify-center gap-2 py-12 text-slate-400" role="status">
       <Loader2 className="animate-spin" size={20} />
-      <span className="text-sm">{label}</span>
+      <span className="text-sm">{label ?? t.common.loading}</span>
     </div>
   );
 }
 
 export function ErrorBanner({ error, onRetry }: { error: AppError | string | null | undefined; onRetry?: () => void }) {
+  const { t, translateError } = useI18n();
   if (!error) return null;
-  const message = typeof error === 'string' ? error : error.message;
+  const message = translateError(typeof error === 'string' ? error : error.message);
   return (
     <div className="flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700" role="alert">
       <AlertCircle size={18} className="mt-0.5 shrink-0" />
       <span className="flex-1">{message}</span>
       {onRetry && (
         <button onClick={onRetry} className="font-semibold underline">
-          Retry
+          {t.common.retry}
         </button>
       )}
     </div>
@@ -148,6 +151,7 @@ export function Modal({
   children: ReactNode;
   wide?: boolean;
 }) {
+  const { t } = useI18n();
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -171,7 +175,7 @@ export function Modal({
       >
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <div className="font-semibold text-slate-900">{title}</div>
-          <button onClick={onClose} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" aria-label="Close">
+          <button onClick={onClose} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" aria-label={t.common.close}>
             <X size={20} />
           </button>
         </div>
@@ -210,5 +214,5 @@ export function formatDate(value: string | null | undefined): string {
   if (!value) return '';
   // Date-only strings (YYYY-MM-DD) are local dates, not UTC midnight.
   const d = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(currentLocale(), { year: 'numeric', month: 'short', day: 'numeric' });
 }

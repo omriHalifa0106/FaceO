@@ -6,6 +6,7 @@ import { enrollMyFace, giveFaceConsent, withdrawFaceConsent } from '@/lib/faceRe
 import { useAuth } from '@/context/AuthContext';
 import { Button, ErrorBanner, SuccessBanner, formatDate } from '@/components/ui';
 import type { AppError } from '@/lib/result';
+import { useI18n } from '@/i18n/I18nProvider';
 
 const MAX_SAMPLES = 3;
 
@@ -25,6 +26,7 @@ export default function FaceEnrollment() {
   const [cameraOn, setCameraOn] = useState(false);
   const [busy, setBusy] = useState<'enroll' | 'delete' | 'consent' | null>(null);
   const [agreed, setAgreed] = useState(false);
+  const { t } = useI18n();
   const [error, setError] = useState<AppError | string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -72,7 +74,7 @@ export default function FaceEnrollment() {
         }
       });
     } catch {
-      setError('Could not open the camera. Allow camera access or upload photos instead.');
+      setError(t.face.cameraError);
     }
   };
 
@@ -105,9 +107,7 @@ export default function FaceEnrollment() {
     clearSamples();
     await refreshProfile();
     setSuccess(
-      res.data.linkedPhotos > 0
-        ? `Face saved. We found you in ${res.data.linkedPhotos} existing photo(s).`
-        : 'Face saved. New photos of you will be recognised automatically.',
+      t.face.saved(res.data.linkedPhotos),
     );
   };
 
@@ -121,7 +121,7 @@ export default function FaceEnrollment() {
   };
 
   const withdraw = async () => {
-    if (!window.confirm('Withdraw consent and delete your face data? New photos will no longer be matched to you.')) return;
+    if (!window.confirm(t.face.withdrawConfirm)) return;
     setBusy('delete');
     setError(null);
     setSuccess(null);
@@ -133,7 +133,7 @@ export default function FaceEnrollment() {
       clearSamples();
       setAgreed(false);
       await refreshProfile();
-      setSuccess('Consent withdrawn and your face data deleted.');
+      setSuccess(t.face.withdrawn);
     }
   };
 
@@ -146,22 +146,20 @@ export default function FaceEnrollment() {
         <div className="flex items-start gap-3">
           <ShieldCheck className="mt-0.5 shrink-0 text-teal-600" />
           <div className="space-y-2 text-sm text-slate-600">
-            <p className="font-semibold text-slate-800">Face recognition is optional and needs your consent.</p>
-            <ul className="list-disc space-y-1 pl-5">
-              <li>Your selfies are processed on this device and are <strong>not uploaded</strong>.</li>
-              <li>We store only a numeric face signature (biometric data). Only you can read it; matching happens on our server without showing it to anyone.</li>
-              <li>It is used only to find you in photos of groups you belong to.</li>
-              <li>You can withdraw at any time here; your face signature is then deleted immediately.</li>
-              <li>You can also remove yourself from any single photo with "Hide me".</li>
+            <p className="font-semibold text-slate-800">{t.face.consentTitle}</p>
+            <ul className="list-disc space-y-1 ps-5">
+              {t.face.consentPoints.map((point) => (
+                <li key={point}>{point}</li>
+              ))}
             </ul>
           </div>
         </div>
         <label className="flex items-start gap-2 text-sm text-slate-700">
           <input type="checkbox" className="mt-1" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
-          I agree that FaceO processes my face signature for recognising me in group photos, as described above.
+          {t.face.consentCheckbox}
         </label>
         <Button onClick={() => void consent()} disabled={!agreed} loading={busy === 'consent'}>
-          <ShieldCheck size={16} /> I agree, continue
+          <ShieldCheck size={16} /> {t.face.consentButton}
         </Button>
       </div>
     );
@@ -174,14 +172,13 @@ export default function FaceEnrollment() {
         <div className="text-sm text-slate-600">
           {profile?.face_enrolled_at ? (
             <p>
-              <span className="font-semibold text-teal-700">Face profile active.</span> You can replace it with new selfies at any time.
+              <span className="font-semibold text-teal-700">{t.face.active}</span> {t.face.activeRest}
             </p>
           ) : (
-            <p>Add 1–3 clear selfies (only you, facing the camera, good light) so FaceO can find you in group photos.</p>
+            <p>{t.face.intro}</p>
           )}
           <p className="mt-1 text-xs text-slate-500">
-            The photos are processed on this device and are not uploaded. Only a numeric face signature is stored, and only you can access it.
-            {' '}Consent given {formatDate(profile.face_consent_at)}.
+            {t.face.privacyNote} {t.face.consentGiven(formatDate(profile.face_consent_at))}
           </p>
         </div>
       </div>
@@ -194,10 +191,10 @@ export default function FaceEnrollment() {
           <video ref={videoRef} playsInline muted className="mx-auto max-h-80 -scale-x-100" />
           <div className="absolute inset-x-0 bottom-3 flex justify-center gap-2">
             <Button onClick={capture} disabled={samples.length >= MAX_SAMPLES}>
-              <Camera size={16} /> Capture ({samples.length}/{MAX_SAMPLES})
+              <Camera size={16} /> {t.face.capture(samples.length, MAX_SAMPLES)}
             </Button>
             <Button variant="secondary" onClick={stopCamera}>
-              Close camera
+              {t.face.closeCamera}
             </Button>
           </div>
         </div>
@@ -207,11 +204,11 @@ export default function FaceEnrollment() {
         <div className="flex flex-wrap gap-3">
           {samples.map((s) => (
             <div key={s.id} className="relative">
-              <img src={s.url} alt="Selfie sample" className="h-24 w-24 rounded-xl object-cover" />
+              <img src={s.url} alt={t.face.sampleAlt} className="h-24 w-24 rounded-xl object-cover" />
               <button
                 onClick={() => removeSample(s.id)}
-                className="absolute -right-2 -top-2 rounded-full bg-white p-1 shadow"
-                aria-label="Remove sample"
+                className="absolute -end-2 -top-2 rounded-full bg-white p-1 shadow"
+                aria-label={t.face.removeSample}
               >
                 <X size={14} />
               </button>
@@ -223,11 +220,11 @@ export default function FaceEnrollment() {
       <div className="flex flex-wrap gap-2">
         {!cameraOn && (
           <Button variant="secondary" onClick={() => void startCamera()} disabled={samples.length >= MAX_SAMPLES}>
-            <Camera size={16} /> Use camera
+            <Camera size={16} /> {t.face.useCamera}
           </Button>
         )}
         <Button variant="secondary" onClick={() => fileRef.current?.click()} disabled={samples.length >= MAX_SAMPLES}>
-          <ImagePlus size={16} /> Choose selfies
+          <ImagePlus size={16} /> {t.face.chooseSelfies}
         </Button>
         <input
           ref={fileRef}
@@ -241,10 +238,10 @@ export default function FaceEnrollment() {
           }}
         />
         <Button onClick={() => void enroll()} disabled={samples.length === 0} loading={busy === 'enroll'}>
-          <ScanFace size={16} /> {profile?.face_enrolled_at ? 'Replace face profile' : 'Save face profile'}
+          <ScanFace size={16} /> {profile?.face_enrolled_at ? t.face.replace : t.face.save}
         </Button>
         <Button variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => void withdraw()} loading={busy === 'delete'}>
-          <Trash2 size={16} /> Withdraw consent & delete face data
+          <Trash2 size={16} /> {t.face.withdraw}
         </Button>
       </div>
     </div>
